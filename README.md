@@ -16,24 +16,20 @@ This project demonstrates advanced spatial analytics by combining IoT sensor net
 
 ### BLE Beacon (Dog Collar Tag)
 
-**Recommended: BlueCharm BC05** (~$21)
-- IP67 waterproof — essential for dogs
-- Motion sensor for smart advertising (fast when moving, slow when stationary)
-- CR2477 battery — 4-6 months at 100ms intervals
+**Selected: BlueCharm BC021** (~$19)
+- Motion sensor + button trigger for smart advertising
+- Lightest option: 36×36×5.75mm, 8g
+- CR2032 battery — ~1.5 months at 100ms intervals
 - Configurable: 100-10,000ms advertising interval, -40 to +4 dBm TX power
-- Size: 40×40×16mm, 20g
-
-**Alternative: BlueCharm BC011** (~$19)
-- Thinnest/lightest option: 36×36×6mm, 8.6g
-- Same configurability as BC05
-- Not waterproof (requires protective case)
-- CR2032 battery — 1-2 months at 100ms intervals
+- BLE 5.0 (backward compatible with 4.0)
+- Supports iBeacon, Eddystone UID/URL/TLM formats
 
 **Configuration for this project:**
-- Advertising interval: 100-200ms (10-5Hz) for real-time tracking
+- Advertising interval: 100-200ms (5-10Hz) for real-time tracking
 - TX Power: 0 dBm (reduces floor bleed while maintaining range)
+- Motion-triggered advertising: fast when moving, slow when stationary
 
-> **Why not popular consumer trackers?**
+> **Why not consumer trackers?**
 > | Device | Issue |
 > |--------|-------|
 > | Apple AirTag | Randomized MAC, encrypted Find My protocol — ESPresense can only count them |
@@ -147,6 +143,56 @@ $$P(L_t | S_{1:t}) \propto P(S_t | L_t) \int P(L_t | L_{t-1}) P(L_{t-1} | S_{1:t
   - Particle cloud visualization
   - Activity inference (Sleeping, Pacing, Eating/Drinking)
 
+## Project Structure
+
+```
+bayesian-pet-localization/
+├── config/
+│   ├── floorplan/
+│   │   └── layout.json          # Floor plans, anchor positions, POIs
+│   ├── mosquitto/
+│   │   └── mosquitto.conf       # MQTT broker config
+│   └── postgres/
+│       └── init.sql             # Database schema
+├── models/                       # Trained ML models (.pkl)
+├── services/
+│   ├── inference/               # Python inference service
+│   │   ├── main.py              # FastAPI + MQTT subscriber
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   └── dashboard/               # Streamlit visualization
+│       ├── app.py
+│       ├── requirements.txt
+│       └── Dockerfile
+└── docker-compose.yml           # Full stack deployment
+```
+
+## Quick Start (Raspberry Pi)
+
+```bash
+# Clone repository
+git clone https://github.com/chill0121/bayesian-pet-localization.git
+cd bayesian-pet-localization
+
+# Start all services
+docker compose up -d
+
+# View logs
+docker compose logs -f inference
+
+# Access dashboard
+# Open browser: http://<pi-ip>:8501
+```
+
+**Services:**
+| Service | Port | Description |
+|---------|------|-------------|
+| Mosquitto | 1883 | MQTT broker (anchors connect here) |
+| InfluxDB | 8086 | Time-series database |
+| PostgreSQL | 5432 | Relational database |
+| Inference | 8000 | FastAPI (position API) |
+| Dashboard | 8501 | Streamlit (visualization) |
+
 ## Project Status
 
 **Current Phase:** Hardware Setup & Data Collection
@@ -155,11 +201,11 @@ $$P(L_t | S_{1:t}) \propto P(S_t | L_t) \int P(L_t | L_{t-1}) P(L_{t-1} | S_{1:t
 
 | Component | Qty Needed | Status |
 |-----------|------------|--------|
-| BlueCharm BC05 beacon | 2 (1 + backup) | To order |
+| BlueCharm BC021 beacon | 2 (1 + backup) | 1 ordered |
 | M5Stack AtomS3 Lite | 11-12 | 1 acquired |
 | USB-C wall adapters | 12 | To order |
-| Raspberry Pi 4/5 | 1 | To order |
-| CR2477 batteries | 4+ | To order |
+| Raspberry Pi 4/5 | 1 | 1 ordered |
+| CR2032 batteries | 4+ | To order |
 
 ### Implementation Phases
 
