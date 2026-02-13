@@ -1,0 +1,120 @@
+{
+  "floors": [
+    {
+      "floor": 1,
+      "name": "First Floor",
+      "width_ft": 14,
+      "height_ft": 12,
+      "rooms": [
+        {
+          "name": "entrance_hallway",
+          "label": "Entrance & Hallway",
+          "bounds": {"x1": 0, "y1": 0, "x2": 14, "y2": 4}
+        },
+        {
+          "name": "office",
+          "label": "Office",
+          "bounds": {"x1": 0, "y1": 4, "x2": 9, "y2": 12},
+          "poi": [
+            {"name": "desk", "x": 4.5, "y": 8},
+            {"name": "dog_bed_office", "x": 2, "y": 10}
+          ]
+        }
+      ],
+      "anchors": [
+        {"id": "office", "x": 4.5, "y": 10, "description": "Near dog bed"},
+        {"id": "hallway_f1", "x": 7, "y": 2, "description": "Near staircase"}
+      ]
+    },
+    {
+      "floor": 2,
+      "name": "Second Floor",
+      "width_ft": 30,
+      "height_ft": 15,
+      "rooms": [
+        {
+          "name": "living_room",
+          "label": "Living Room",
+          "bounds": {"x1": 0, "y1": 0, "x2": 15, "y2": 15},
+          "poi": [
+            {"name": "couch", "x": 7, "y": 10},
+            {"name": "chair", "x": 3, "y": 5}
+          ]
+        },
+        {
+          "name": "kitchen",
+          "label": "Kitchen",
+          "bounds": {"x1": 15, "y1": 0, "x2": 30, "y2": 15},
+          "poi": [
+            {"name": "water_bowl", "x": 20, "y": 12}
+          ]
+        },
+        {
+          "name": "powder_room",
+          "label": "Powder Room",
+          "bounds": {"x1": 26, "y1": 11, "x2": 30, "y2": 15},
+          "poi": [
+            {"name": "rug_powder", "x": 28, "y": 13}
+          ]
+        }
+      ],
+      "anchors": [
+        {"id": "living_nw", "x": 1, "y": 14, "description": "Living room NW corner"},
+        {"id": "living_sw", "x": 1, "y": 1, "description": "Living room SW corner"},
+        {"id": "kitchen_ne", "x": 29, "y": 14, "description": "Kitchen NE corner"},
+        {"id": "kitchen_se", "x": 29, "y": 1, "description": "Kitchen SE corner"},
+        {"id": "powder_room", "x": 28, "y": 13, "description": "Powder room"}
+      ]
+    },
+    {
+      "floor": 3,
+      "name": "Third Floor",
+      "width_ft": 14.5,
+      "height_ft": 20,
+      "rooms": [
+        {
+          "name": "master_bedroom",
+          "label": "Master Bedroom",
+          "bounds": {"x1": 0, "y1": 0, "x2": 14, "y2": 10},
+          "poi": [
+            {"name": "under_bed", "x": 7, "y": 5}
+          ]
+        },
+        {
+          "name": "master_bath",
+          "label": "Master Bath",
+          "bounds": {"x1": 8, "y1": 10, "x2": 14, "y2": 15}
+        },
+        {
+          "name": "hallway_f3",
+          "label": "Hallway",
+          "bounds": {"x1": 0, "y1": 10, "x2": 14.5, "y2": 13.5}
+        },
+        {
+          "name": "spare_bedroom",
+          "label": "Spare Bedroom / Wife's Office",
+          "bounds": {"x1": 0, "y1": 13.5, "x2": 10, "y2": 23.5},
+          "poi": [
+            {"name": "dog_bed_wife_office", "x": 5, "y": 18}
+          ]
+        },
+        {
+          "name": "guest_bath",
+          "label": "Guest Bathroom",
+          "bounds": {"x1": 10, "y1": 13.5, "x2": 15, "y2": 18.5}
+        }
+      ],
+      "anchors": [
+        {"id": "master_bedroom", "x": 7, "y": 5, "description": "Near under-bed spot"},
+        {"id": "master_bath", "x": 11, "y": 12, "description": "Master bath"},
+        {"id": "wife_office", "x": 5, "y": 18, "description": "Near dog bed"},
+        {"id": "hallway_f3", "x": 7, "y": 12, "description": "Hallway near stairs"}
+      ]
+    }
+  ],
+  "beacon": {
+    "id": "dog_collar",
+    "name": "Dog Collar Beacon",
+    "type": "BlueCharm BC021"
+  }
+}
