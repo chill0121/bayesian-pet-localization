@@ -201,10 +201,10 @@ docker compose logs -f inference
 
 | Component | Qty Needed | Status |
 |-----------|------------|--------|
-| BlueCharm BC021 beacon | 2 (1 + backup) | 1 ordered |
+| BlueCharm BC021 beacon | 2 (1 + backup) | 1 acquired |
 | M5Stack AtomS3 Lite | 11-12 | 1 acquired |
 | USB-C wall adapters | 12 | To order |
-| Raspberry Pi 4/5 | 1 | 1 ordered |
+| Raspberry Pi 4/5 | 1 | 1 acquired |
 | CR2032 batteries | 4+ | To order |
 
 ### Implementation Phases
