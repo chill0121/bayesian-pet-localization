@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # MQTT Broker - receives data from ESP32 anchors
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # WebSocket (optional)
+    volumes:
+      - ./config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    restart: unless-stopped
+
+  # Time-series database for raw RSSI data
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=changeme123
+      - DOCKER_INFLUXDB_INIT_ORG=pet-localization
+      - DOCKER_INFLUXDB_INIT_BUCKET=rssi_raw
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  # Relational database for state history and labeled training data
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=localization
+      - POSTGRES_PASSWORD=changeme123
+      - POSTGRES_DB=pet_tracking
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  # Inference service - MQTT subscriber, ML pipeline, FastAPI
+  inference:
+    build:
+      context: ./services/inference
+      dockerfile: Dockerfile
+    container_name: inference
+    ports:
+      - "8000:8000"   # FastAPI
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=super-secret-token
+      - INFLUXDB_ORG=pet-localization
+      - INFLUXDB_BUCKET=rssi_raw
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=localization
+      - POSTGRES_PASSWORD=123456789
+      - POSTGRES_DB=pet_tracking
+    volumes:
+      - ./models:/app/models          # Pre-trained ML models
+      - ./config/floorplan:/app/floorplan  # Occupancy grid, coordinates
+    depends_on:
+      - mosquitto
+      - influxdb
+      - postgres
+    restart: unless-stopped
+
+  # Dashboard - Streamlit visualization
+  dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard
+    ports:
+      - "8501:8501"   # Streamlit
+    environment:
+      - INFERENCE_API_URL=http://inference:8000
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=super-secret-token
+      - INFLUXDB_ORG=pet-localization
+    volumes:
+      - ./config/floorplan:/app/floorplan
+    depends_on:
+      - inference
+    restart: unless-stopped
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  influxdb_data:
+  postgres_data:
