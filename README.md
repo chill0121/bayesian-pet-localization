@@ -29,14 +29,6 @@ This project demonstrates advanced spatial analytics by combining IoT sensor net
 - TX Power: 0 dBm (reduces floor bleed while maintaining range)
 - Motion-triggered advertising: fast when moving, slow when stationary
 
-> **Why not consumer trackers?**
-> | Device | Issue |
-> |--------|-------|
-> | Apple AirTag | Randomized MAC, encrypted Find My protocol — ESPresense can only count them |
-> | Samsung SmartTag | Randomized MAC, proprietary protocol |
-> | Tile | ~2s advertising interval (not configurable) — too slow for real-time |
-> | Chipolo | Proprietary or Apple Find My protocol |
-
 ### Anchor Nodes
 
 **M5Stack AtomS3 Lite** × 11-12 units
