@@ -1,4 +1,15 @@
 {
+  "_schema_notes": {
+    "units": "feet (all x, y, width, length, height values)",
+    "origin": "NW corner of each floor = (0, 0); bottom-left in 2D view",
+    "coordinate_system": "x increases left→right, y increases front→back (north→south)",
+    "bounds": "axis-aligned rect: (x1, y1) = min corner, (x2, y2) = max corner",
+    "doorways": "{to, x, y, width, type} — (x, y) = center of opening on shared wall edge; width = clear opening in ft; type = open | door | exterior",
+    "stairs": "{to_floor, x, y, width, length} — (x, y) = center of staircase footprint on THIS floor; width × length = footprint rect in ft",
+    "poi": "points of interest for training labels — dog beds, water bowls, etc.",
+    "obstacles": "{name, type, bounds, height_ft} — solid objects inside a room that block movement; type = counter | furniture | barrier | island",
+    "anchor_height_ft": "mounting height above floor in ft (used in baseline 3D path-loss distance calc but not RF fingerprinting model)"
+  },
   "floors": [
     {
       "floor": 1,
@@ -9,12 +20,19 @@
         {
           "name": "entrance_hallway",
           "label": "Entrance & Hallway",
-          "bounds": {"x1": 0, "y1": 0, "x2": 14, "y2": 4}
+          "bounds": {"x1": 0, "y1": 0, "x2": 14, "y2": 4},
+          "doorways": [
+            {"to": "office", "x": 4.5, "y": 4, "width": 3, "type": "open"},
+            {"to": "exterior", "x": 7, "y": 0, "width": 3, "type": "door"}
+          ]
         },
         {
           "name": "office",
           "label": "Office",
           "bounds": {"x1": 0, "y1": 4, "x2": 9, "y2": 12},
+          "doorways": [
+            {"to": "entrance_hallway", "x": 4.5, "y": 4, "width": 3, "type": "open"}
+          ],
           "poi": [
             {"name": "desk", "x": 4.5, "y": 8},
             {"name": "dog_bed_office", "x": 2, "y": 10}
@@ -22,8 +40,11 @@
         }
       ],
       "anchors": [
-        {"id": "office", "x": 4.5, "y": 10, "description": "Near dog bed"},
-        {"id": "hallway_f1", "x": 7, "y": 2, "description": "Near staircase"}
+        {"id": "office", "x": 4.5, "y": 10, "height_ft": 7, "description": "Near dog bed"},
+        {"id": "hallway_f1", "x": 7, "y": 2, "height_ft": 7, "description": "Near staircase"}
+      ],
+      "stairs": [
+        {"to_floor": 2, "x": 10, "y": 2, "width": 3, "length": 3, "description": "Stairs up to second floor"}
       ]
     },
     {
@@ -36,6 +57,9 @@
           "name": "living_room",
           "label": "Living Room",
           "bounds": {"x1": 0, "y1": 0, "x2": 15, "y2": 15},
+          "doorways": [
+            {"to": "kitchen", "x": 15, "y": 7.5, "width": 6, "type": "open"}
+          ],
           "poi": [
             {"name": "couch", "x": 7, "y": 10},
             {"name": "chair", "x": 3, "y": 5}
@@ -45,6 +69,18 @@
           "name": "kitchen",
           "label": "Kitchen",
           "bounds": {"x1": 15, "y1": 0, "x2": 30, "y2": 15},
+          "doorways": [
+            {"to": "living_room", "x": 15, "y": 7.5, "width": 6, "type": "open"},
+            {"to": "powder_room", "x": 26, "y": 12, "width": 2.5, "type": "door"}
+          ],
+          "obstacles": [
+            {
+              "name": "peninsula_counter",
+              "type": "counter",
+              "bounds": {"x1": 15, "y1": 8, "x2": 20, "y2": 10},
+              "height_ft": 3
+            }
+          ],
           "poi": [
             {"name": "water_bowl", "x": 20, "y": 12}
           ]
@@ -53,29 +89,40 @@
           "name": "powder_room",
           "label": "Powder Room",
           "bounds": {"x1": 26, "y1": 11, "x2": 30, "y2": 15},
+          "doorways": [
+            {"to": "kitchen", "x": 26, "y": 12, "width": 2.5, "type": "door"}
+          ],
           "poi": [
             {"name": "rug_powder", "x": 28, "y": 13}
           ]
         }
       ],
       "anchors": [
-        {"id": "living_nw", "x": 1, "y": 14, "description": "Living room NW corner"},
-        {"id": "living_sw", "x": 1, "y": 1, "description": "Living room SW corner"},
-        {"id": "kitchen_ne", "x": 29, "y": 14, "description": "Kitchen NE corner"},
-        {"id": "kitchen_se", "x": 29, "y": 1, "description": "Kitchen SE corner"},
-        {"id": "powder_room", "x": 28, "y": 13, "description": "Powder room"}
+        {"id": "living_nw", "x": 1, "y": 14, "height_ft": 7, "description": "Living room NW corner"},
+        {"id": "living_sw", "x": 1, "y": 1, "height_ft": 7, "description": "Living room SW corner"},
+        {"id": "kitchen_ne", "x": 29, "y": 14, "height_ft": 7, "description": "Kitchen NE corner"},
+        {"id": "kitchen_se", "x": 29, "y": 1, "height_ft": 7, "description": "Kitchen SE corner"},
+        {"id": "powder_room", "x": 28, "y": 13, "height_ft": 7, "description": "Powder room"}
+      ],
+      "stairs": [
+        {"to_floor": 1, "x": 10, "y": 2, "width": 3, "length": 3, "description": "Stairs down to first floor"},
+        {"to_floor": 3, "x": 10, "y": 2, "width": 3, "length": 3, "description": "Stairs up to third floor"}
       ]
     },
     {
       "floor": 3,
       "name": "Third Floor",
       "width_ft": 14.5,
-      "height_ft": 20,
+      "height_ft": 23.5,
       "rooms": [
         {
           "name": "master_bedroom",
           "label": "Master Bedroom",
           "bounds": {"x1": 0, "y1": 0, "x2": 14, "y2": 10},
+          "doorways": [
+            {"to": "hallway_f3", "x": 7, "y": 10, "width": 3, "type": "door"},
+            {"to": "master_bath", "x": 11, "y": 10, "width": 2.5, "type": "door"}
+          ],
           "poi": [
             {"name": "under_bed", "x": 7, "y": 5}
           ]
@@ -83,17 +130,28 @@
         {
           "name": "master_bath",
           "label": "Master Bath",
-          "bounds": {"x1": 8, "y1": 10, "x2": 14, "y2": 15}
+          "bounds": {"x1": 8, "y1": 10, "x2": 14, "y2": 15},
+          "doorways": [
+            {"to": "master_bedroom", "x": 11, "y": 10, "width": 2.5, "type": "door"}
+          ]
         },
         {
           "name": "hallway_f3",
           "label": "Hallway",
-          "bounds": {"x1": 0, "y1": 10, "x2": 14.5, "y2": 13.5}
+          "bounds": {"x1": 0, "y1": 10, "x2": 14.5, "y2": 13.5},
+          "doorways": [
+            {"to": "master_bedroom", "x": 7, "y": 10, "width": 3, "type": "door"},
+            {"to": "spare_bedroom", "x": 5, "y": 13.5, "width": 3, "type": "open"},
+            {"to": "guest_bath", "x": 12, "y": 13.5, "width": 2.5, "type": "door"}
+          ]
         },
         {
           "name": "spare_bedroom",
           "label": "Spare Bedroom / Wife's Office",
           "bounds": {"x1": 0, "y1": 13.5, "x2": 10, "y2": 23.5},
+          "doorways": [
+            {"to": "hallway_f3", "x": 5, "y": 13.5, "width": 3, "type": "open"}
+          ],
           "poi": [
             {"name": "dog_bed_wife_office", "x": 5, "y": 18}
           ]
@@ -101,14 +159,20 @@
         {
           "name": "guest_bath",
           "label": "Guest Bathroom",
-          "bounds": {"x1": 10, "y1": 13.5, "x2": 15, "y2": 18.5}
+          "bounds": {"x1": 10, "y1": 13.5, "x2": 15, "y2": 18.5},
+          "doorways": [
+            {"to": "hallway_f3", "x": 12, "y": 13.5, "width": 2.5, "type": "door"}
+          ]
         }
       ],
       "anchors": [
-        {"id": "master_bedroom", "x": 7, "y": 5, "description": "Near under-bed spot"},
-        {"id": "master_bath", "x": 11, "y": 12, "description": "Master bath"},
-        {"id": "wife_office", "x": 5, "y": 18, "description": "Near dog bed"},
-        {"id": "hallway_f3", "x": 7, "y": 12, "description": "Hallway near stairs"}
+        {"id": "master_bedroom", "x": 7, "y": 5, "height_ft": 7, "description": "Near under-bed spot"},
+        {"id": "master_bath", "x": 11, "y": 12, "height_ft": 7, "description": "Master bath"},
+        {"id": "wife_office", "x": 5, "y": 18, "height_ft": 7, "description": "Near dog bed"},
+        {"id": "hallway_f3", "x": 7, "y": 12, "height_ft": 7, "description": "Hallway near stairs"}
+      ],
+      "stairs": [
+        {"to_floor": 2, "x": 10, "y": 12, "width": 3, "length": 3, "description": "Stairs down to second floor"}
       ]
     }
   ],
