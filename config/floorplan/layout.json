@@ -1,7 +1,7 @@
 {
   "_schema_notes": {
     "units": "feet (all x, y, width, length, height values)",
-    "origin": "NW corner of each floor = (0, 0); bottom-left in 2D view",
+    "origin": "{TBD} corner of each floor = (0, 0); {TBD} in 2D view",
     "coordinate_system": "x increases left→right, y increases front→back (north→south)",
     "bounds": "axis-aligned rect: (x1, y1) = min corner, (x2, y2) = max corner",
     "doorways": "{to, x, y, width, type} — (x, y) = center of opening on shared wall edge; width = clear opening in ft; type = open | door | exterior",
