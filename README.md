@@ -52,6 +52,10 @@ This project demonstrates advanced spatial analytics by combining IoT sensor net
 
 ## Floorplan
 
+**Coordinate System:** 1 unit = 1 foot. Origin (0,0) at SW corner of each floor. +X = East, +Y = North.
+
+**Scan Accuracy:** ARPlan 3D on Samsung S21 Ultra (ToF depth sensor, no LiDAR). Cross-scan door width tolerance measured at ±0.15 inches (±4mm) across 6 shared doorways — approximately ±0.1-0.3% at room scale.
+
 ```
 Floor 1: Entrance + hallway (14x4 ft), staircase, office (9x8 ft)
 Floor 2: Open floor plan (15x30 ft), powder room (3x4 ft), stairway
