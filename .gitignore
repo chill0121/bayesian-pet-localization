@@ -63,6 +63,7 @@ Thumbs.db
 data/
 
 # Scratch files
-./scratch/*
-./temp/*
-./tmp/*
+
+scratch/*
+temp/*
+tmp/*
