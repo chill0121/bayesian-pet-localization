@@ -61,3 +61,8 @@ Thumbs.db
 
 # Database volumes (managed by Docker)
 data/
+
+# Scratch files
+./scratch/*
+./temp/*
+./tmp/*
