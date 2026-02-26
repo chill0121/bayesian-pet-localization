@@ -7,7 +7,7 @@
     "bounds": "Polygon: [[x,y], ...] CCW winding traces walkable perimeter; Rectangle: {x1,y1,x2,y2} SW->NE corners",
     "outer_boundary": "[[x,y], ...] CCW polygon of building perimeter on this floor",
     "doorways": "{to, type, label, center, wall_axis, width, hinge?, arc_degrees?}",
-    "vertex_prefix": "Single-letter room prefix for vertex labels (e.g. H \u2192 H.A, H.B, ...)",
+    "vertex_prefix": "Single-letter room prefix for vertex labels (e.g. H → H.A, H.B, ...)",
     "stairs": "{to_floor, via_room, entry, direction}",
     "zones": "[{name, label}] optional sub-regions for HMM zone classification",
     "gates": "[{between, segment, width_ft, axis, coord}] soft boundaries between zones",
@@ -15,9 +15,8 @@
     "anchors": "{id, position, height_ft} BLE receiver mount points",
     "poi": "{name, position} training labels (dog beds, bowls, etc.)",
     "ceiling_height_ft": "per-room floor-to-ceiling height from AR scan",
-    "data_source": "Extracted from combined plots via extract_coords.py \u2014 coordinates are ground truth",
-    "generated_by": "scripts/extract_coords.py from floorplan/analysis.json + diagram_rooms.py transforms"
-  },
+    "data_source": "Extracted from combined plots via extract_coords.py — coordinates are ground truth"
+    },
   "floors": [
     {
       "floor": 1,
@@ -537,7 +536,7 @@
             "x2": 2.96,
             "y2": 20.8
           },
-          "_note": "Walkable zone \u2014 U-shaped switchback staircase between 1F and 3F",
+          "_note": "Walkable zone — U-shaped switchback staircase between 1F and 3F",
           "doorways": [
             {
               "to": "living_kitchen",
@@ -679,7 +678,7 @@
             10.27
           ],
           "direction": "down",
-          "description": "South stair run \u2014 down to 1F"
+          "description": "South stair run — down to 1F"
         },
         {
           "to_floor": 3,
@@ -689,7 +688,7 @@
             20.8
           ],
           "direction": "up",
-          "description": "North stair run \u2014 up to 3F"
+          "description": "North stair run — up to 3F"
         }
       ]
     },
