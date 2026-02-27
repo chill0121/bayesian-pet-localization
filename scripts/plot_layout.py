@@ -247,8 +247,13 @@ def draw_compass(ax):
 
 # ── Main floor drawing ───────────────────────────────────────────────────────
 
-def draw_floor(ax, floor_data, title, room_color_map=None):
-    """Draw a complete floor from layout.json data."""
+def draw_floor(ax, floor_data, title, room_color_map=None, show_vertices=True):
+    """Draw a complete floor from layout.json data.
+
+    Args:
+        show_vertices: If True, draw vertex labels with coordinates.
+                       Set False for dashboard/tracker views.
+    """
     all_xs, all_ys = [], []
 
     # Outer boundary
@@ -274,14 +279,16 @@ def draw_floor(ax, floor_data, title, room_color_map=None):
                                     linewidth=1.2, hatch='///', alpha=0.55, zorder=2)
             ax.add_patch(patch)
             draw_room_label(ax, poly, room.get('label', rname), '#555555')
-            draw_vertex_labels(ax, poly, prefix, '#888888')
+            if show_vertices:
+                draw_vertex_labels(ax, poly, prefix, '#888888')
             all_xs.extend(p[0] for p in poly)
             all_ys.extend(p[1] for p in poly)
             continue
 
         draw_polygon(ax, poly, color)
         draw_room_label(ax, poly, room.get('label', rname), color)
-        draw_vertex_labels(ax, poly, prefix, color)
+        if show_vertices:
+            draw_vertex_labels(ax, poly, prefix, color)
         all_xs.extend(p[0] for p in poly)
         all_ys.extend(p[1] for p in poly)
 
