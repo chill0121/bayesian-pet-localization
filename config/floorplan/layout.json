@@ -268,7 +268,17 @@
           "walkable": false
         }
       ],
-      "anchors": [],
+      "anchors": [
+        {
+          "id": "1F_Office",
+          "position": [
+            3.75,
+            6.5
+          ],
+          "height_ft": 1,
+          "_note": "AtomS3 Lite — 1F Office, North wall next to Luna's bed"
+        }
+      ],
       "stairs": [
         {
           "to_floor": 2,
