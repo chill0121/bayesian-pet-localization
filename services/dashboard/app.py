@@ -83,16 +83,21 @@ def create_floor_plan(floor_data: dict, position: dict = None, rssi_data: dict =
     # Draw room outlines with labels
     for room in floor_data.get("rooms", []):
         b = room["bounds"]
-        fig.add_shape(
-            type="rect",
-            x0=b["x1"], y0=b["y1"],
-            x1=b["x2"], y1=b["y2"],
+        if isinstance(b, dict):
+            xs = [b["x1"], b["x2"], b["x2"], b["x1"], b["x1"]]
+            ys = [b["y1"], b["y1"], b["y2"], b["y2"], b["y1"]]
+        else:
+            xs = [pt[0] for pt in b] + [b[0][0]]
+            ys = [pt[1] for pt in b] + [b[0][1]]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines",
             line=dict(color="rgba(100, 100, 100, 0.8)", width=1.5),
-            fillcolor="rgba(230, 240, 250, 0.3)",
-        )
+            fill="toself", fillcolor="rgba(230, 240, 250, 0.3)",
+            showlegend=False, hoverinfo="skip",
+        ))
         # Room label at center
-        cx = (b["x1"] + b["x2"]) / 2
-        cy = (b["y1"] + b["y2"]) / 2
+        cx = sum(xs[:-1]) / (len(xs) - 1)
+        cy = sum(ys[:-1]) / (len(ys) - 1)
         fig.add_annotation(
             x=cx, y=cy,
             text=room.get("label", room["name"]),
@@ -103,8 +108,9 @@ def create_floor_plan(floor_data: dict, position: dict = None, rssi_data: dict =
     # Draw anchor positions
     anchor_x, anchor_y, anchor_labels = [], [], []
     for anchor in floor_data.get("anchors", []):
-        anchor_x.append(anchor["x"])
-        anchor_y.append(anchor["y"])
+        pos = anchor.get("position", [anchor.get("x", 0), anchor.get("y", 0)])
+        anchor_x.append(pos[0])
+        anchor_y.append(pos[1])
         
         # Show RSSI value next to anchor if available
         rssi_val = ""

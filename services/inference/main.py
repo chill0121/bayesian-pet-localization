@@ -70,9 +70,10 @@ def load_floorplan():
             for floor_data in floorplan_data.get("floors", []):
                 floor_num = floor_data["floor"]
                 for anchor in floor_data.get("anchors", []):
+                    pos = anchor.get("position", [anchor.get("x", 0), anchor.get("y", 0)])
                     anchor_coords[anchor["id"]] = {
-                        "x": anchor["x"],
-                        "y": anchor["y"],
+                        "x": pos[0],
+                        "y": pos[1],
                         "floor": floor_num,
                     }
             logger.info(f"Loaded {len(anchor_coords)} anchor positions from {path}")
@@ -195,9 +196,17 @@ def on_message(client, userdata, msg):
         if len(topic_parts) >= 4 and topic_parts[0] == "espresense":
             device_id = topic_parts[2]
             anchor_id = topic_parts[3] if len(topic_parts) > 3 else "unknown"
-            
-            payload = json.loads(msg.payload.decode())
-            
+
+            raw = msg.payload.decode().strip()
+            if not raw:
+                return
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(payload, dict):
+                return
+
             rssi_val = payload.get("rssi", -100)
             distance_val = payload.get("distance", 0)
             now = datetime.now(timezone.utc).isoformat()
