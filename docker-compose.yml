@@ -64,6 +64,7 @@ services:
       - POSTGRES_USER=localization
       - POSTGRES_PASSWORD=123456789
       - POSTGRES_DB=pet_tracking
+      - BEACON_ID=iBeacon:426c7565-4368-6172-6d42-6561636f6e73-3838-4949
     volumes:
       - ./models:/app/models          # Pre-trained ML models
       - ./config/floorplan:/app/floorplan  # Occupancy grid, coordinates
