@@ -31,7 +31,7 @@ This project demonstrates advanced spatial analytics by combining IoT sensor net
 
 ### Anchor Nodes
 
-**M5Stack AtomS3 Lite** × 11-12 units
+**M5Stack AtomS3 Lite** × 10 units
 - ESP32-S3 with built-in 3D antenna
 - Runs [ESPresense](https://espresense.com/) firmware
 - USB-C powered, compact form factor
@@ -40,8 +40,8 @@ This project demonstrates advanced spatial analytics by combining IoT sensor net
 | Floor | Nodes | Locations |
 |-------|-------|-----------|
 | 1st | 2 | Office (near dog bed), Hallway (near stairs) |
-| 2nd | 5 | 4× corners of open floor plan, 1× powder room |
-| 3rd | 4 | Master bedroom, Master bath, Wife's office, Hallway/stairs |
+| 2nd | 4 | Living SE, Living SW/center, Kitchen NE, Staircase opening |
+| 3rd | 4 | Master bedroom, Master bath, Wife's office, Hallway |
 
 ### Infrastructure
 
@@ -198,8 +198,8 @@ docker compose logs -f inference
 | Component | Qty Needed | Status |
 |-----------|------------|--------|
 | BlueCharm BC021 beacon | 2 (1 + backup) | 1 acquired |
-| M5Stack AtomS3 Lite | 11-12 | 1 acquired |
-| USB-C wall adapters | 12 | To order |
+| M5Stack AtomS3 Lite | 10 | 1 acquired |
+| USB-C wall adapters | 10 | To order |
 | Raspberry Pi 4/5 | 1 | 1 acquired |
 | CR2032 batteries | 4+ | To order |
 
