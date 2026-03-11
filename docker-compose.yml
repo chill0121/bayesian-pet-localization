@@ -20,11 +20,11 @@ services:
       - "8086:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=changeme123
-      - DOCKER_INFLUXDB_INIT_ORG=pet-localization
-      - DOCKER_INFLUXDB_INIT_BUCKET=rssi_raw
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_ADMIN_USER}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
     volumes:
       - influxdb_data:/var/lib/influxdb2
     restart: unless-stopped
@@ -36,9 +36,9 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=localization
-      - POSTGRES_PASSWORD=changeme123
-      - POSTGRES_DB=pet_tracking
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -53,18 +53,18 @@ services:
     ports:
       - "8000:8000"   # FastAPI
     environment:
-      - MQTT_HOST=mosquitto
-      - MQTT_PORT=1883
+      - MQTT_HOST=${MQTT_HOST}
+      - MQTT_PORT=${MQTT_PORT}
       - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=my-super-secret-token
-      - INFLUXDB_ORG=pet-localization
-      - INFLUXDB_BUCKET=rssi_raw
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=localization
-      - POSTGRES_PASSWORD=123456789
-      - POSTGRES_DB=pet_tracking
-      - BEACON_ID=iBeacon:426c7565-4368-6172-6d42-6561636f6e73-3838-4949
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - BEACON_ID=${BEACON_ID}
     volumes:
       - ./models:/app/models          # Pre-trained ML models
       - ./config/floorplan:/app/floorplan  # Occupancy grid, coordinates
@@ -85,8 +85,8 @@ services:
     environment:
       - INFERENCE_API_URL=http://inference:8000
       - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=my-super-secret-token
-      - INFLUXDB_ORG=pet-localization
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG}
     volumes:
       - ./config/floorplan:/app/floorplan
     depends_on:
