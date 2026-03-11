@@ -300,9 +300,8 @@ def draw_floor(ax, floor_data, title, room_color_map=None, show_vertices=True):
         for door in room.get('doorways', []):
             draw_door(ax, door)
 
-        # Stairs opening
-        stairs_opening = room.get('stairs_opening')
-        if stairs_opening:
+        # Stairs openings
+        for stairs_opening in room.get('stairs_openings', []):
             draw_door(ax, stairs_opening, color=STAIRS_COLOR)
 
         # Gates

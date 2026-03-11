@@ -7,6 +7,7 @@
     "bounds": "Polygon: [[x,y], ...] CCW winding traces walkable perimeter; Rectangle: {x1,y1,x2,y2} SW->NE corners",
     "outer_boundary": "[[x,y], ...] CCW polygon of building perimeter on this floor",
     "doorways": "{to, type, label, center, wall_axis, width, hinge?, arc_degrees?}",
+    "stairs_openings": "[{to, type, label, center, wall_axis, width}] open passages between a room and a staircase (no door)",
     "vertex_prefix": "Single-letter room prefix for vertex labels (e.g. H → H.A, H.B, ...)",
     "stairs": "{to_floor, via_room, entry, direction}",
     "zones": "[{name, label}] optional sub-regions for HMM zone classification",
@@ -139,17 +140,19 @@
               ]
             }
           ],
-          "stairs_opening": {
-            "to": "staircase",
-            "type": "open",
-            "label": "H.D-H.E",
-            "center": [
-              1.47,
-              20.1
-            ],
-            "wall_axis": "x",
-            "width": 2.93
-          }
+          "stairs_openings": [
+            {
+              "to": "staircase",
+              "type": "open",
+              "label": "H.D-H.E",
+              "center": [
+                1.47,
+                20.1
+              ],
+              "wall_axis": "x",
+              "width": 2.93
+            }
+          ]
         },
         {
           "name": "office",
@@ -435,7 +438,7 @@
               "_note": "Peninsula south edge -> staircase wall opening"
             }
           ],
-          "doorways": [
+          "stairs_openings": [
             {
               "to": "staircase",
               "type": "open",
@@ -457,7 +460,9 @@
               ],
               "wall_axis": "x",
               "width": 2.96
-            },
+            }
+          ],
+          "doorways": [
             {
               "to": "powder_room",
               "type": "door",
@@ -834,17 +839,19 @@
               ]
             }
           ],
-          "stairs_opening": {
-            "to": "staircase",
-            "type": "open",
-            "label": "H.C-H.D",
-            "center": [
-              3.8,
-              9.76
-            ],
-            "wall_axis": "y",
-            "width": 3.02
-          },
+          "stairs_openings": [
+            {
+              "to": "staircase",
+              "type": "open",
+              "label": "H.C-H.D",
+              "center": [
+                3.8,
+                9.76
+              ],
+              "wall_axis": "y",
+              "width": 3.02
+            }
+          ],
           "obstacles": [
             {
               "name": "laundry",
