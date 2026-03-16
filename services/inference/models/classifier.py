@@ -1,0 +1,487 @@
+"""
+Random Forest Room/Zone Classifier for Bayesian Pet Localization
+
+Predicts floor-qualified room labels (e.g. "2F_kitchen", "3F_master_bed")
+from RSSI-derived feature vectors produced by :class:`features.FeatureEngine`.
+
+Training
+--------
+Load fingerprint samples from PostgreSQL, extract features, optionally
+augment, then fit a :class:`sklearn.ensemble.RandomForestClassifier`.
+
+Prediction
+----------
+Given a feature dict (from ``FeatureEngine.update()``), assemble the
+feature vector in canonical order, impute missing anchors with sentinel
+values, and return ``(label, confidence, probabilities)``.
+
+Persistence
+-----------
+Trained models are serialized via ``joblib`` to the ``models/`` directory.
+A ``model_versions`` row in PostgreSQL tracks the active model.
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+import joblib
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
+
+logger = logging.getLogger(__name__)
+
+# Sentinel value for missing anchor RSSI (well below real range of -30…-90)
+MISSING_RSSI_SENTINEL: float = -100.0
+
+
+class RoomClassifier:
+    """Random Forest room/zone classifier.
+
+    Parameters
+    ----------
+    anchor_ids : list[str]
+        Ordered list of expected anchor identifiers.  Determines the
+        canonical feature vector layout.
+    model_path : str | None
+        If given, load a pre-trained model from this path at init.
+    """
+
+    def __init__(
+        self,
+        anchor_ids: list[str],
+        model_path: Optional[str] = None,
+    ):
+        self._anchor_ids: list[str] = sorted(anchor_ids)
+        self._feature_names: list[str] = self._build_feature_names()
+        self._model: Optional[RandomForestClassifier] = None
+        self._classes: Optional[np.ndarray] = None  # floor-qualified labels
+
+        if model_path is not None:
+            self.load(model_path)
+
+    # ------------------------------------------------------------------
+    # Feature vector assembly
+    # ------------------------------------------------------------------
+
+    def _build_feature_names(self) -> list[str]:
+        """Return the canonical ordered list of feature names.
+
+        This must match the order used during training *and* prediction.
+        """
+        names: list[str] = []
+
+        # 1. Smoothed RSSI per anchor (passed separately, not from FeatureEngine)
+        for aid in self._anchor_ids:
+            names.append(f"rssi_{aid}")
+
+        # 2. Delta RSSI per anchor + aggregates
+        for aid in self._anchor_ids:
+            names.append(f"delta_rssi_{aid}")
+        names.extend(["delta_mean", "delta_max"])
+
+        # 3. Anchor rankings per anchor + aggregates
+        for aid in self._anchor_ids:
+            names.append(f"rank_{aid}")
+        names.extend(["rank_changes", "rssi_gap_1_2"])
+
+        # 4. Rolling variance per anchor + aggregates
+        for aid in self._anchor_ids:
+            names.append(f"var_{aid}")
+        names.extend(["var_mean", "var_max"])
+
+        # 5. Cross-floor attenuation (floors 1-3)
+        for floor in (1, 2, 3):
+            names.append(f"n_anchors_floor_{floor}")
+            names.append(f"rssi_mean_floor_{floor}")
+        names.extend(["rssi_best_floor", "same_vs_cross_ratio"])
+
+        # 6. Composite
+        names.extend(["n_reporting", "activity_score"])
+
+        return names
+
+    def _assemble_vector(
+        self,
+        features: dict,
+        smoothed_rssi: Optional[dict] = None,
+    ) -> np.ndarray:
+        """Convert a feature dict into an ordered numpy vector.
+
+        Missing features are filled with appropriate sentinel/default values:
+        - RSSI features → ``MISSING_RSSI_SENTINEL`` (-100)
+        - Delta/variance/rank features → 0
+        - Floor count features → 0
+        - Floor mean RSSI features → ``MISSING_RSSI_SENTINEL``
+
+        Parameters
+        ----------
+        features : dict
+            Output of ``FeatureEngine.update()``.
+        smoothed_rssi : dict | None
+            anchor_id → smoothed RSSI.  Provides the ``rssi_<anchor>``
+            features that are *not* part of the FeatureEngine output.
+        """
+        smoothed = smoothed_rssi or {}
+        vec = np.zeros(len(self._feature_names), dtype=np.float64)
+
+        for i, name in enumerate(self._feature_names):
+            if name.startswith("rssi_") and not name.startswith("rssi_mean_floor_") and not name.startswith("rssi_best_floor") and not name.startswith("rssi_gap_"):
+                # Smoothed RSSI per anchor
+                aid = name[len("rssi_"):]
+                vec[i] = smoothed.get(aid, MISSING_RSSI_SENTINEL)
+            elif name.startswith("rssi_mean_floor_"):
+                vec[i] = features.get(name, MISSING_RSSI_SENTINEL)
+            elif name in features:
+                vec[i] = features[name]
+            else:
+                # Default: 0 for deltas, variances, ranks, counts
+                vec[i] = 0.0
+
+        return vec
+
+    # ------------------------------------------------------------------
+    # Data augmentation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _augment(
+        X: np.ndarray,
+        y: np.ndarray,
+        anchor_count: int,
+        factor: int = 5,
+        rssi_noise_std: float = 3.0,
+        dropout_prob: float = 0.15,
+        rng: Optional[np.random.Generator] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Augment training data with RSSI jitter and anchor dropout.
+
+        Parameters
+        ----------
+        X : (N, D) feature matrix.
+        y : (N,) label array.
+        anchor_count : number of per-anchor RSSI columns at the start of X.
+        factor : augmentation multiplier per sample.
+        rssi_noise_std : std-dev of Gaussian noise added to RSSI columns.
+        dropout_prob : probability of masking each anchor per augmented sample.
+        rng : numpy random generator (for reproducibility).
+
+        Returns
+        -------
+        X_aug, y_aug : augmented arrays (original data included).
+        """
+        if rng is None:
+            rng = np.random.default_rng(42)
+
+        aug_X_parts = [X]
+        aug_y_parts = [y]
+
+        for _ in range(factor):
+            X_copy = X.copy()
+
+            # Add Gaussian noise to the first `anchor_count` columns (RSSI)
+            noise = rng.normal(0, rssi_noise_std, size=(X.shape[0], anchor_count))
+            # Only add noise to non-sentinel values
+            mask = X_copy[:, :anchor_count] > MISSING_RSSI_SENTINEL
+            X_copy[:, :anchor_count] += noise * mask
+
+            # Random anchor dropout: set some RSSI columns to sentinel
+            dropout_mask = rng.random((X.shape[0], anchor_count)) < dropout_prob
+            X_copy[:, :anchor_count] = np.where(
+                dropout_mask, MISSING_RSSI_SENTINEL, X_copy[:, :anchor_count]
+            )
+
+            aug_X_parts.append(X_copy)
+            aug_y_parts.append(y.copy())
+
+        return np.vstack(aug_X_parts), np.concatenate(aug_y_parts)
+
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
+
+    def train(
+        self,
+        samples: list[dict],
+        augment_factor: int = 5,
+        n_estimators: int = 200,
+        cv_folds: int = 5,
+    ) -> dict:
+        """Train on fingerprint sample dicts from the database.
+
+        Each sample dict must contain at minimum:
+        - ``"location_label"`` (str): room name (e.g. ``"kitchen"``)
+        - ``"floor"`` (int): floor number
+        - ``"rssi_vector"`` (dict): ``{anchor_id: mean_rssi, ...}``
+
+        Optionally:
+        - ``"features"`` (dict): pre-computed FeatureEngine output.
+          If absent, only smoothed RSSI + zero-filled derived features
+          are used (adequate for initial training).
+
+        Parameters
+        ----------
+        samples : list[dict]
+            Rows from ``fingerprint_samples`` table.
+        augment_factor : int
+            Data augmentation multiplier (0 = no augmentation).
+        n_estimators : int
+            Number of trees in the forest.
+        cv_folds : int
+            Stratified K-fold count for cross-validation.
+
+        Returns
+        -------
+        dict
+            Metrics: accuracy, macro_f1, per_class_f1, confusion_matrix,
+            cv_scores, top_features.
+        """
+        if len(samples) < 2:
+            raise ValueError("Need at least 2 samples to train")
+
+        # -- Build X, y --------------------------------------------------------
+        X_rows = []
+        y_labels = []
+
+        for sample in samples:
+            label = f"{sample['floor']}F_{sample['location_label']}"
+            rssi_vec = sample.get("rssi_vector", {})
+            feat_dict = sample.get("features", {})
+
+            vec = self._assemble_vector(feat_dict, smoothed_rssi=rssi_vec)
+            X_rows.append(vec)
+            y_labels.append(label)
+
+        X = np.array(X_rows, dtype=np.float64)
+        y = np.array(y_labels)
+
+        # -- Augmentation ------------------------------------------------------
+        anchor_count = len(self._anchor_ids)
+        if augment_factor > 0:
+            X, y = self._augment(X, y, anchor_count, factor=augment_factor)
+
+        logger.info(
+            "Training RF: %d samples (%d original × %d aug), %d features, %d classes",
+            len(y),
+            len(samples),
+            augment_factor + 1,
+            X.shape[1],
+            len(np.unique(y)),
+        )
+
+        # -- Fit model ---------------------------------------------------------
+        self._model = RandomForestClassifier(
+            n_estimators=n_estimators,
+            max_depth=None,
+            min_samples_leaf=3,
+            min_samples_split=5,
+            max_features="sqrt",
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+        )
+        self._model.fit(X, y)
+        self._classes = self._model.classes_
+
+        # -- Cross-validation metrics -----------------------------------------
+        metrics = self._evaluate_cv(X, y, cv_folds=cv_folds)
+
+        logger.info(
+            "RF trained — accuracy=%.3f  macro_f1=%.3f  classes=%s",
+            metrics["accuracy"],
+            metrics["macro_f1"],
+            list(self._classes),
+        )
+        return metrics
+
+    def _evaluate_cv(self, X: np.ndarray, y: np.ndarray, cv_folds: int) -> dict:
+        """Run stratified k-fold cross-validation and compile metrics."""
+        unique_classes, class_counts = np.unique(y, return_counts=True)
+        min_class_count = class_counts.min()
+
+        # Adjust folds if any class has fewer samples than requested folds
+        effective_folds = min(cv_folds, min_class_count)
+        if effective_folds < 2:
+            # Not enough data for CV — report training metrics only
+            y_pred = self._model.predict(X)
+            return self._compile_metrics(y, y_pred, cv_scores=[])
+
+        skf = StratifiedKFold(
+            n_splits=effective_folds, shuffle=True, random_state=42
+        )
+        y_pred = cross_val_predict(self._model, X, y, cv=skf)
+        cv_scores = []
+        for train_idx, test_idx in skf.split(X, y):
+            fold_pred = self._model.predict(X[test_idx])
+            cv_scores.append(float(accuracy_score(y[test_idx], fold_pred)))
+
+        return self._compile_metrics(y, y_pred, cv_scores=cv_scores)
+
+    def _compile_metrics(
+        self, y_true: np.ndarray, y_pred: np.ndarray, cv_scores: list[float]
+    ) -> dict:
+        """Build the metrics dict stored in model_versions."""
+        labels = sorted(np.unique(np.concatenate([y_true, y_pred])))
+        per_class = f1_score(y_true, y_pred, labels=labels, average=None)
+        per_class_f1 = {lbl: round(float(f), 4) for lbl, f in zip(labels, per_class)}
+
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+        # Feature importances
+        importances = {}
+        if self._model is not None:
+            for name, imp in zip(self._feature_names, self._model.feature_importances_):
+                importances[name] = round(float(imp), 5)
+        top_features = dict(
+            sorted(importances.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        )
+
+        return {
+            "accuracy": round(float(accuracy_score(y_true, y_pred)), 4),
+            "macro_f1": round(
+                float(f1_score(y_true, y_pred, average="macro")), 4
+            ),
+            "per_class_f1": per_class_f1,
+            "confusion_matrix": cm.tolist(),
+            "confusion_labels": labels,
+            "cv_scores": [round(s, 4) for s in cv_scores],
+            "top_features": top_features,
+            "n_classes": len(labels),
+            "n_features": len(self._feature_names),
+        }
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        features: dict,
+        smoothed_rssi: Optional[dict] = None,
+    ) -> tuple[str, float, dict]:
+        """Predict room label from a feature dict.
+
+        Parameters
+        ----------
+        features : dict
+            Output of ``FeatureEngine.update()``.
+        smoothed_rssi : dict | None
+            anchor_id → smoothed RSSI (for the ``rssi_<anchor>`` features).
+
+        Returns
+        -------
+        label : str
+            Floor-qualified label, e.g. ``"2F_kitchen"``.
+        confidence : float
+            Probability of the predicted class (0–1).
+        probabilities : dict
+            ``{label: probability}`` for all classes.
+        """
+        if self._model is None:
+            raise RuntimeError("No model loaded — call train() or load() first")
+
+        vec = self._assemble_vector(features, smoothed_rssi).reshape(1, -1)
+        proba = self._model.predict_proba(vec)[0]
+        idx = int(np.argmax(proba))
+        label = str(self._classes[idx])
+        confidence = float(proba[idx])
+        probabilities = {
+            str(cls): round(float(p), 4)
+            for cls, p in zip(self._classes, proba)
+        }
+        return label, confidence, probabilities
+
+    @property
+    def is_trained(self) -> bool:
+        """Whether a model is loaded and ready for prediction."""
+        return self._model is not None
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Serialize trained model + metadata to a joblib file."""
+        if self._model is None:
+            raise RuntimeError("No model to save — call train() first")
+        artifact = {
+            "model": self._model,
+            "feature_names": self._feature_names,
+            "anchor_ids": self._anchor_ids,
+            "classes": self._classes.tolist(),
+        }
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(artifact, path)
+        logger.info("Saved RF model to %s", path)
+
+    def load(self, path: str) -> None:
+        """Deserialize a model from a joblib file."""
+        artifact = joblib.load(path)
+        self._model = artifact["model"]
+        self._feature_names = artifact["feature_names"]
+        self._anchor_ids = artifact["anchor_ids"]
+        self._classes = np.array(artifact["classes"])
+        logger.info(
+            "Loaded RF model from %s (%d classes, %d features)",
+            path,
+            len(self._classes),
+            len(self._feature_names),
+        )
+
+    @classmethod
+    def from_file(cls, path: str) -> "RoomClassifier":
+        """Factory: create a RoomClassifier from a saved model file."""
+        artifact = joblib.load(path)
+        instance = cls(anchor_ids=artifact["anchor_ids"])
+        instance._model = artifact["model"]
+        instance._feature_names = artifact["feature_names"]
+        instance._classes = np.array(artifact["classes"])
+        return instance
+
+    # ------------------------------------------------------------------
+    # Introspection
+    # ------------------------------------------------------------------
+
+    @property
+    def feature_names(self) -> list[str]:
+        """Ordered list of feature names the model expects."""
+        return list(self._feature_names)
+
+    @property
+    def feature_importances(self) -> dict[str, float]:
+        """Feature name → Gini importance (requires trained model)."""
+        if self._model is None:
+            return {}
+        return {
+            name: round(float(imp), 5)
+            for name, imp in zip(
+                self._feature_names, self._model.feature_importances_
+            )
+        }
+
+    @property
+    def classes(self) -> list[str]:
+        """List of floor-qualified class labels."""
+        if self._classes is None:
+            return []
+        return [str(c) for c in self._classes]
+
+    @property
+    def anchor_ids(self) -> list[str]:
+        """Anchor IDs used for feature assembly."""
+        return list(self._anchor_ids)
+
+    def __repr__(self) -> str:
+        status = "trained" if self._model is not None else "untrained"
+        n_cls = len(self._classes) if self._classes is not None else 0
+        return (
+            f"RoomClassifier({status}, anchors={len(self._anchor_ids)}, "
+            f"features={len(self._feature_names)}, classes={n_cls})"
+        )
