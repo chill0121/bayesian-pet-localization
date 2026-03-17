@@ -11,6 +11,7 @@ import os
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Thread
 from typing import Optional
 
@@ -21,10 +22,13 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from pydantic import BaseModel
 
-# Local modules (to be implemented)
-# from filters.kalman import KalmanFilter
-# from models.classifier import LocationClassifier
-# from filters.particle import ParticleFilter
+from filters.kalman import KalmanFilterBank
+from filters.particle import ParticleFilter, extract_stairways
+from filters.floor_hmm import FloorTransitionHMM
+from occupancy import OccupancyGridSet, bounds_to_polygon, _point_in_polygon
+from db import Database
+from features import FeatureEngine
+from models.classifier import RoomClassifier
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,14 +38,51 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 BEACON_ID = os.getenv("BEACON_ID", "dog_collar")
 
 INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "my-super-secret-token")
+INFLUXDB_TOKEN = os.environ["INFLUXDB_TOKEN"]
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "pet-localization")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "rssi_raw")
 FLOORPLAN_PATH = os.getenv("FLOORPLAN_PATH", "config/floorplan/layout.json")
+
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_USER = os.environ["POSTGRES_USER"]
+POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_DB = os.getenv("POSTGRES_DB", "pet_tracking")
+
+# -----------------------------------------------------------------------------
+# Pipeline tuning constants
+# -----------------------------------------------------------------------------
+
+# Kalman filter bank
+KALMAN_PROCESS_NOISE = 0.5        # process noise variance (trust measurements)
+KALMAN_MEASUREMENT_NOISE = 1.0    # measurement noise variance (~0.8 dBm from data)
+KALMAN_STALE_TIMEOUT = 30.0       # seconds before anchor is considered stale
+
+# Particle filter
+N_PARTICLES = 500                 # number of particles
+
+# Feature engineering
+FEATURE_WINDOW_SIZE = 10          # rolling window for per-anchor variance (samples)
+
+# Activity classification thresholds (applied to activity_score 0–1)
+ACTIVITY_SLEEPING_THRESHOLD = 0.15    # below → "sleeping"
+ACTIVITY_STATIONARY_THRESHOLD = 0.45  # below → "stationary", above → "moving"
+
+# Inference timing
+DEFAULT_DT = 0.5                  # assumed dt (seconds) for first inference cycle
+MAX_DT = 10.0                     # cap dt to avoid huge jumps after long gaps
+
+# In-memory ring buffer sizes
+POSITION_HISTORY_MAXLEN = 500
+RSSI_HISTORY_MAXLEN = 1000
+
+# MQTT reconnect
+MQTT_RECONNECT_DELAY = 5          # seconds between reconnection attempts
+MQTT_KEEPALIVE = 60               # MQTT keepalive interval (seconds)
 
 # -----------------------------------------------------------------------------
 # Floor Plan / Anchor Coordinate Lookup
@@ -51,6 +92,38 @@ FLOORPLAN_PATH = os.getenv("FLOORPLAN_PATH", "config/floorplan/layout.json")
 anchor_coords: dict[str, dict] = {}
 # Full floor plan data for the /floorplan endpoint
 floorplan_data: dict = {}
+# Occupancy grids for wall constraints (particle filter)
+occupancy_grids: Optional[OccupancyGridSet] = None
+
+# Inference pipeline components
+kalman_bank: Optional[KalmanFilterBank] = None
+particle_filter: Optional[ParticleFilter] = None
+floor_hmm: Optional[FloorTransitionHMM] = None
+
+# Per-floor room polygons for location labeling: {floor: [(name, polygon), ...]}
+room_polygons: dict[int, list[tuple[str, list]]] = {}
+
+# Per-floor, per-room gate definitions for zone sub-classification
+# {floor: {room_name: [{"axis": "y", "coord": 20.73, "above": "kitchen", "below": "living_room"}, ...]}}
+room_gates: dict[int, dict[str, list[dict]]] = {}
+
+# Timing: last inference timestamp for computing dt
+_last_inference_time: Optional[float] = None
+
+# Feature engineering pipeline
+feature_engine: Optional[FeatureEngine] = None
+
+# Room classifier (Random Forest)
+room_classifier: Optional[RoomClassifier] = None
+
+# Confidence threshold for RF label override (Option A fusion)
+RF_CONFIDENCE_THRESHOLD = float(os.getenv("RF_CONFIDENCE_THRESHOLD", "0.7"))
+
+# Path to model artifacts directory
+MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "models"))
+
+# PostgreSQL client
+db: Optional[Database] = None
 
 
 def load_floorplan():
@@ -148,10 +221,10 @@ mqtt_connected = False
 message_count = 0
 
 # Position history (ring buffer for recent positions)
-position_history: deque = deque(maxlen=500)
+position_history: deque = deque(maxlen=POSITION_HISTORY_MAXLEN)
 
 # RSSI history (ring buffer for recent readings)
-rssi_history: deque = deque(maxlen=1000)
+rssi_history: deque = deque(maxlen=RSSI_HISTORY_MAXLEN)
 
 # Current position estimate
 current_position = {
@@ -247,51 +320,218 @@ def on_message(client, userdata, msg):
         logger.error(f"Error processing MQTT message: {e}")
 
 
+def _label_room(x: float, y: float, floor: int) -> str:
+    """Determine which room (or zone within a room) a point falls in.
+
+    If the room defines zones separated by gates (e.g. the open-plan
+    living_kitchen split into 'kitchen' and 'living_room' by the
+    peninsula gate line), the zone name is returned instead of the
+    room name.
+    """
+
+
+def _load_active_classifier() -> Optional[RoomClassifier]:
+    """Load the active RF model from disk if one exists.
+
+    Checks the ``models/`` directory for ``random_forest_v*.joblib`` files.
+    If a PostgreSQL ``model_versions`` row with ``active=TRUE`` exists and
+    points to a valid file, that model is loaded.  Otherwise falls back to
+    the newest joblib file in the directory.
+
+    Returns ``None`` if no model is available (expected before first training).
+    """
+    global room_classifier
+    model_dir = Path(MODEL_DIR)
+
+    # Try DB-driven model path first
+    if db is not None and db.connected:
+        try:
+            from sqlalchemy import select
+            from db import model_versions as mv_table
+            with db._engine.connect() as conn:
+                row = conn.execute(
+                    select(mv_table.c.artifact_path).where(
+                        mv_table.c.model_type == "random_forest",
+                        mv_table.c.active == True,  # noqa: E712
+                    )
+                ).first()
+            if row and row[0]:
+                artifact_path = Path(row[0])
+                if artifact_path.exists():
+                    clf = RoomClassifier.from_file(str(artifact_path))
+                    logger.info("Loaded active RF model from DB: %s", artifact_path)
+                    return clf
+        except Exception as e:
+            logger.debug("Could not load model via DB: %s", e)
+
+    # Fallback: scan models/ directory for newest joblib file
+    if model_dir.exists():
+        joblib_files = sorted(model_dir.glob("random_forest_v*.joblib"))
+        if joblib_files:
+            newest = joblib_files[-1]
+            try:
+                clf = RoomClassifier.from_file(str(newest))
+                logger.info("Loaded RF model from disk: %s", newest)
+                return clf
+            except Exception as e:
+                logger.warning("Failed to load RF model %s: %s", newest, e)
+
+    logger.info("No RF model available — classifier disabled until training (TODO #21)")
+    return None
+
+
+def _label_room(x: float, y: float, floor: int) -> str:
+    for name, poly in room_polygons.get(floor, []):
+        if _point_in_polygon(x, y, poly):
+            # Check if this room has gate-defined zones
+            gates = room_gates.get(floor, {}).get(name, [])
+            for gate in gates:
+                axis = gate["axis"]
+                coord = gate["coord"]
+                val = y if axis == "y" else x
+                if val >= coord:
+                    return gate["above"]
+                else:
+                    return gate["below"]
+            return name
+    return "unknown"
+
+
 def run_inference(device_id: str):
     """
     Run the ML inference pipeline.
-    
+
     Pipeline:
     1. Collect RSSI vector from all anchors
-    2. Apply Kalman filter for smoothing
-    3. Extract features
-    4. Run classifier for location prediction
-    5. Update particle filter for temporal smoothing
-    6. Update current_position
+    2. Apply Kalman filter for per-anchor smoothing
+    3. Feed smoothed RSSI into particle filter (which drives Floor HMM)
+    4. Read position estimate and determine room label
+    5. Update current_position
     """
-    global current_position
-    
+    global current_position, _last_inference_time
+
     readings = rssi_buffer.get(device_id, {})
     if not readings:
         return
-    
-    # Extract RSSI vector
+
+    now = time.time()
+
+    # --- 1. Raw RSSI vector ---------------------------------------------------
     rssi_vector = {anchor: data["rssi"] for anchor, data in readings.items()}
-    
-    # TODO: Implement actual inference pipeline
-    # For now, just find the strongest anchor and use its coordinates
-    if rssi_vector:
-        strongest_anchor = max(rssi_vector, key=rssi_vector.get)
-        
-        # Look up anchor coordinates from floor plan
-        coords = anchor_coords.get(strongest_anchor, {})
-        
-        position_update = {
-            "x": coords.get("x", 0.0),
-            "y": coords.get("y", 0.0),
-            "floor": coords.get("floor", 1),
-            "location_label": strongest_anchor,
-            "confidence": 0.5,  # Placeholder
-            "activity": "unknown",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "raw_rssi": rssi_vector,
-        }
-        current_position.update(position_update)
-        
-        # Store in position history
-        position_history.append({**current_position})
-        
-        logger.debug(f"Position updated: {strongest_anchor} @ floor {coords.get('floor')}, ({coords.get('x')}, {coords.get('y')})")
+    if not rssi_vector:
+        return
+
+    # --- 2. Kalman smoothing --------------------------------------------------
+    if kalman_bank is not None:
+        for anchor_id, raw_rssi in rssi_vector.items():
+            kalman_bank.update(anchor_id, raw_rssi, now)
+        smoothed_rssi = kalman_bank.get_smoothed_rssi(current_time=now)
+    else:
+        smoothed_rssi = rssi_vector
+
+    # --- 3. Feature engineering -----------------------------------------------
+    if feature_engine is not None:
+        computed_features = feature_engine.update(rssi_vector, smoothed_rssi, now)
+    else:
+        computed_features = {}
+
+    # --- 4. Particle filter step (includes Floor HMM) ------------------------
+    if particle_filter is None:
+        logger.warning("Particle filter not initialised — skipping inference")
+        return
+
+    # Compute dt since last inference
+    dt = (now - _last_inference_time) if _last_inference_time is not None else DEFAULT_DT
+    dt = min(dt, MAX_DT)  # cap to avoid huge jumps after long gaps
+
+    estimate = particle_filter.step(smoothed_rssi, dt)
+
+    _last_inference_time = now
+
+    # --- 5. Room label --------------------------------------------------------
+    polygon_label = _label_room(estimate["x"], estimate["y"], estimate["floor"])
+
+    # --- 5b. RF classifier prediction (if model loaded) ----------------------
+    rf_label = None
+    rf_confidence = 0.0
+    rf_probabilities = {}
+    if room_classifier is not None and room_classifier.is_trained:
+        try:
+            rf_full_label, rf_confidence, rf_probabilities = room_classifier.predict(
+                computed_features, smoothed_rssi=smoothed_rssi
+            )
+            # rf_full_label is floor-qualified e.g. "2F_kitchen" — extract room name
+            parts = rf_full_label.split("_", 1)
+            rf_label = parts[1] if len(parts) == 2 else rf_full_label
+        except Exception as e:
+            logger.warning("RF classifier prediction failed: %s", e)
+
+    # --- 5c. Label fusion (Option A: confidence-threshold override) -----------
+    if rf_label is not None and rf_confidence >= RF_CONFIDENCE_THRESHOLD:
+        location_label = rf_label
+    else:
+        location_label = polygon_label
+
+    # --- 6. Floor belief from HMM (if available) ------------------------------
+    floor_belief = None
+    if floor_hmm is not None:
+        floor_belief = floor_hmm.floor_belief
+
+    # --- 7. Activity label from feature engine --------------------------------
+    activity_score = computed_features.get("activity_score", 0.0)
+    if activity_score < ACTIVITY_SLEEPING_THRESHOLD:
+        activity_label = "sleeping"
+    elif activity_score < ACTIVITY_STATIONARY_THRESHOLD:
+        activity_label = "stationary"
+    else:
+        activity_label = "moving"
+
+    # --- 8. Update position state ---------------------------------------------
+    position_update = {
+        "x": round(estimate["x"], 2),
+        "y": round(estimate["y"], 2),
+        "floor": estimate["floor"],
+        "location_label": location_label,
+        "confidence": round(estimate["confidence"], 3),
+        "activity": activity_label,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "raw_rssi": rssi_vector,
+        "smoothed_rssi": smoothed_rssi,
+        "n_eff": estimate.get("n_eff", 0.0),
+        "particle_count": estimate.get("particle_count", 0),
+        "floor_belief": floor_belief,
+        "polygon_label": polygon_label,
+        "rf_label": rf_label,
+        "rf_confidence": round(rf_confidence, 3) if rf_confidence else 0.0,
+    }
+    current_position.update(position_update)
+
+    # Store in position history (in-memory ring buffer)
+    position_history.append({**current_position})
+
+    # Persist to PostgreSQL
+    if db is not None:
+        db.write_position(
+            beacon_id=device_id,
+            x=position_update["x"],
+            y=position_update["y"],
+            floor=position_update["floor"],
+            confidence=position_update["confidence"],
+            location_label=location_label,
+            activity_state=position_update["activity"],
+            raw_rssi=rssi_vector,
+            smoothed_rssi=smoothed_rssi if isinstance(smoothed_rssi, dict) else None,
+            n_eff=estimate.get("n_eff"),
+            particle_count=estimate.get("particle_count"),
+            floor_belief=floor_belief,
+        )
+
+    logger.debug(
+        f"Position: floor {estimate['floor']} "
+        f"({estimate['x']:.1f}, {estimate['y']:.1f}) "
+        f"room={location_label} conf={estimate['confidence']:.2f} "
+        f"n_eff={estimate.get('n_eff', 0):.0f}"
+    )
 
 
 def start_mqtt_client():
@@ -304,12 +544,12 @@ def start_mqtt_client():
     while True:
         try:
             logger.info(f"Connecting to MQTT broker at {MQTT_HOST}:{MQTT_PORT}...")
-            client.connect(MQTT_HOST, MQTT_PORT, 60)
+            client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE)
             client.loop_forever()
         except Exception as e:
-            logger.error(f"MQTT connection failed: {e} — retrying in 5s...")
+            logger.error(f"MQTT connection failed: {e} — retrying in {MQTT_RECONNECT_DELAY}s...")
             import time
-            time.sleep(5)
+            time.sleep(MQTT_RECONNECT_DELAY)
 
 
 # -----------------------------------------------------------------------------
@@ -340,6 +580,10 @@ class PositionResponse(BaseModel):
     activity: str
     timestamp: Optional[str]
     raw_rssi: Optional[dict] = None
+    smoothed_rssi: Optional[dict] = None
+    n_eff: Optional[float] = None
+    particle_count: Optional[int] = None
+    floor_belief: Optional[dict] = None
 
 
 class HealthResponse(BaseModel):
@@ -385,8 +629,21 @@ async def get_rssi_history(limit: int = 100):
 
 
 @app.get("/position/history")
-async def get_position_history(limit: int = 100):
-    """Get recent position history."""
+async def get_position_history(limit: int = 100, source: str = "memory"):
+    """Get recent position history.
+
+    Args:
+        limit: Max records to return.
+        source: 'memory' for in-memory ring buffer, 'db' for PostgreSQL.
+    """
+    if source == "db" and db is not None and db.connected:
+        rows = db.read_position_history(beacon_id=BEACON_ID, limit=limit)
+        # Serialize datetimes for JSON
+        for row in rows:
+            for k, v in row.items():
+                if isinstance(v, datetime):
+                    row[k] = v.isoformat()
+        return rows
     return list(position_history)[-limit:]
 
 
@@ -429,10 +686,29 @@ async def get_floorplan():
     }
 
 
+@app.get("/fingerprints")
+async def get_fingerprints(
+    floor: Optional[int] = None,
+    location: Optional[str] = None,
+    limit: int = 100,
+):
+    """Get fingerprint samples from PostgreSQL (for site survey / training)."""
+    if db is None or not db.connected:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+    rows = db.read_fingerprint_samples(
+        floor=floor, location_label=location, limit=limit
+    )
+    for row in rows:
+        for k, v in row.items():
+            if isinstance(v, datetime):
+                row[k] = v.isoformat()
+    return rows
+
+
 @app.get("/stats")
 async def get_stats():
     """Get service statistics."""
-    return {
+    stats = {
         "mqtt_connected": mqtt_connected,
         "message_count": message_count,
         "beacon_id": BEACON_ID,
@@ -441,7 +717,28 @@ async def get_stats():
         "position_history_size": len(position_history),
         "rssi_history_size": len(rssi_history),
         "influxdb_connected": influx_client is not None,
+        "postgres_connected": db.connected if db else False,
+        "pipeline": {
+            "kalman_active": kalman_bank is not None,
+            "kalman_anchors": kalman_bank.active_anchors if kalman_bank else [],
+            "particle_filter_active": particle_filter is not None,
+            "floor_hmm_active": floor_hmm is not None,
+        },
     }
+    if particle_filter is not None:
+        est = particle_filter.estimate
+        stats["pipeline"]["particle_n_eff"] = est.get("n_eff", 0)
+        stats["pipeline"]["particle_count"] = est.get("particle_count", 0)
+    if floor_hmm is not None:
+        stats["pipeline"]["floor_belief"] = floor_hmm.floor_belief
+        stats["pipeline"]["most_likely_floor"] = floor_hmm.most_likely_floor
+    if room_classifier is not None:
+        stats["pipeline"]["rf_classifier_active"] = room_classifier.is_trained
+        stats["pipeline"]["rf_classes"] = room_classifier.classes
+        stats["pipeline"]["rf_confidence_threshold"] = RF_CONFIDENCE_THRESHOLD
+    else:
+        stats["pipeline"]["rf_classifier_active"] = False
+    return stats
 
 
 # -----------------------------------------------------------------------------
@@ -451,18 +748,101 @@ async def get_stats():
 @app.on_event("startup")
 async def startup_event():
     """Start MQTT client and initialize connections on application startup."""
+    global occupancy_grids, kalman_bank, particle_filter, floor_hmm
+    global room_polygons, room_gates, feature_engine, room_classifier, db
     logger.info("Starting inference service...")
-    
+
     # Load floor plan anchor coordinates
     load_floorplan()
-    
+
+    # Build occupancy grids from loaded floor plan
+    if floorplan_data:
+        occupancy_grids = OccupancyGridSet.from_layout_data(floorplan_data)
+        logger.info(f"Built occupancy grids: {occupancy_grids}")
+
+    # Build room polygon lookup and zone/gate data for location labeling
+    for floor_data in floorplan_data.get("floors", []):
+        floor_num = floor_data["floor"]
+        room_polygons[floor_num] = [
+            (room["name"], bounds_to_polygon(room["bounds"]))
+            for room in floor_data.get("rooms", [])
+        ]
+        # Parse zone gates for rooms that have them
+        for room in floor_data.get("rooms", []):
+            gates = room.get("gates", [])
+            if not gates:
+                continue
+            parsed_gates = []
+            for gate in gates:
+                # Convention: between[0] = zone where axis value >= coord
+                #             between[1] = zone where axis value <  coord
+                parsed_gates.append({
+                    "axis": gate["axis"],
+                    "coord": gate["coord"],
+                    "above": gate["between"][0],
+                    "below": gate["between"][1],
+                })
+            room_gates.setdefault(floor_num, {})[room["name"]] = parsed_gates
+            logger.info(
+                f"Floor {floor_num} room '{room['name']}' has "
+                f"{len(parsed_gates)} zone gate(s): "
+                f"{[g['above'] + '/' + g['below'] for g in parsed_gates]}"
+            )
+
+    # --- Inference pipeline initialisation ---
+    # Kalman filter bank (per-anchor RSSI smoothing)
+    kalman_bank = KalmanFilterBank(
+        process_noise=KALMAN_PROCESS_NOISE,
+        measurement_noise=KALMAN_MEASUREMENT_NOISE,
+        stale_timeout=KALMAN_STALE_TIMEOUT,
+    )
+    logger.info("Kalman filter bank initialised")
+
+    # Floor Transition HMM
+    if floorplan_data and anchor_coords:
+        floor_hmm = FloorTransitionHMM(floorplan_data, anchor_coords)
+        logger.info(f"Floor HMM initialised: floors {floor_hmm.floors}")
+
+    # Particle filter (needs occupancy grids + anchors + stairways + HMM)
+    if occupancy_grids and anchor_coords:
+        stairways = extract_stairways(floorplan_data)
+        particle_filter = ParticleFilter(
+            occupancy_grids=occupancy_grids,
+            anchor_positions=anchor_coords,
+            stairways=stairways,
+            floor_hmm=floor_hmm,
+            n_particles=N_PARTICLES,
+        )
+        particle_filter.initialise_uniform()
+        logger.info(f"Particle filter initialised: {particle_filter}")
+
+    # Feature engineering pipeline
+    feature_engine = FeatureEngine(
+        anchor_positions=anchor_coords,
+        window_size=FEATURE_WINDOW_SIZE,
+    )
+    logger.info("Feature engine initialised")
+
+    # Room classifier — load active model if one exists
+    room_classifier = _load_active_classifier()
+
     # Initialize InfluxDB
     init_influxdb()
-    
+
+    # Initialize PostgreSQL
+    db = Database(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        dbname=POSTGRES_DB,
+    )
+    db.connect()
+
     # Start MQTT client in background thread
     mqtt_thread = Thread(target=start_mqtt_client, daemon=True)
     mqtt_thread.start()
-    
+
     logger.info(f"MQTT client connecting to {MQTT_HOST}:{MQTT_PORT}")
     logger.info(f"Tracking beacon ID: {BEACON_ID}")
 
