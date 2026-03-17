@@ -37,6 +37,13 @@ from typing import Optional
 
 import numpy as np
 
+from .constants import (
+    TX_POWER_DBM,
+    PATH_LOSS_N,
+    RSSI_SIGMA,
+    CROSS_FLOOR_PENALTY_FT,
+    MIN_DISTANCE_FT,
+)
 from .floor_hmm import FloorTransitionHMM
 
 # ---------------------------------------------------------------------------
@@ -47,20 +54,16 @@ from .floor_hmm import FloorTransitionHMM
 DOG_MAX_SPEED_FT = 3.28          # ~1 m/s in feet/s
 DOG_SPEED_SIGMA_FT = 1.5         # std-dev of per-axis displacement per second
 
-# RSSI path-loss model (matches simulate_mqtt.py)
-TX_POWER_DBM = -59.0             # measured power at 1 m
-PATH_LOSS_N = 2.7                # path loss exponent (indoor BLE)
-RSSI_SIGMA = 5.0                 # observation noise std-dev (dBm) — loose to
-                                 # account for multipath / body shielding
-CROSS_FLOOR_PENALTY_FT = 30.0    # effective extra distance per floor difference
-MIN_DISTANCE_FT = 1.0            # clamp minimum distance (avoids log(0))
-
 # Resampling
 RESAMPLE_THRESHOLD_RATIO = 0.5   # resample when N_eff < N * ratio
 
 # Floor transition
 STAIR_PROXIMITY_FT = 4.0         # how close a particle must be to a stair entry
 FLOOR_TRANSITION_PROB = 0.02     # base probability of changing floor per step
+
+# Safety guards
+MIN_DT = 0.01                    # minimum dt (seconds) to avoid division issues
+MAX_INIT_ATTEMPTS_MULTIPLIER = 50  # max_attempts = n_particles × this
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +191,7 @@ class ParticleFilter:
         """
         floors = [floor] if floor is not None else list(self._grids.floors)
         placed = 0
-        max_attempts = self.n * 50  # safety limit
+        max_attempts = self.n * MAX_INIT_ATTEMPTS_MULTIPLIER  # safety limit
 
         # Collect walkable cells across target floors
         walkable_cells: list[tuple[int, float, float]] = []
@@ -268,7 +271,7 @@ class ParticleFilter:
         if not self._initialised:
             return
 
-        dt = max(dt, 0.01)  # guard against zero/negative dt
+        dt = max(dt, MIN_DT)  # guard against zero/negative dt
         sigma = DOG_SPEED_SIGMA_FT * math.sqrt(dt)
         max_disp = DOG_MAX_SPEED_FT * dt
 

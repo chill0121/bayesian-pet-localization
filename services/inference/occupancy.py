@@ -21,6 +21,15 @@ import math
 
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Configuration constants
+# ---------------------------------------------------------------------------
+
+# Multiplier on grid resolution for doorway carving depth.
+# A value of 2.0 means the carved passage extends 2 × resolution on each
+# side of the doorway centre, which is enough to punch through a typical wall.
+DOORWAY_CARVING_DEPTH_MULTIPLIER = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Geometry helpers
@@ -114,7 +123,7 @@ def _carve_doorway(center, width, wall_axis, grid, resolution):
     cx, cy = center
     half_w = width / 2.0
     # Depth of the carved passage — enough to punch through the wall
-    depth = resolution * 2.0
+    depth = resolution * DOORWAY_CARVING_DEPTH_MULTIPLIER
 
     if wall_axis == 'x':
         # Wall is horizontal: doorway spans x, passage punches through y
@@ -210,9 +219,8 @@ class OccupancyGrid:
                     dw["center"], dw["width"], dw["wall_axis"],
                     self.grid, self.resolution,
                 )
-            # Also handle stairs_opening (same schema as a doorway)
-            so = room.get("stairs_opening")
-            if so:
+            # Also handle stairs_openings (same schema as a doorway)
+            for so in room.get("stairs_openings", []):
                 _carve_doorway(
                     so["center"], so["width"], so["wall_axis"],
                     self.grid, self.resolution,

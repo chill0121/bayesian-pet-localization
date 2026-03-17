@@ -25,6 +25,12 @@ Usage in the inference pipeline:
 
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Default initial covariance values
+# ---------------------------------------------------------------------------
+INITIAL_RSSI_COVARIANCE = 10.0      # initial uncertainty in RSSI estimate
+INITIAL_VELOCITY_COVARIANCE = 5.0   # initial uncertainty in RSSI velocity
+
 
 class KalmanFilter:
     """
@@ -61,8 +67,8 @@ class KalmanFilter:
 
         # State covariance matrix (start with high uncertainty)
         self.P = np.array([
-            [10.0, 0.0],
-            [0.0, 5.0],
+            [INITIAL_RSSI_COVARIANCE, 0.0],
+            [0.0, INITIAL_VELOCITY_COVARIANCE],
         ])
 
         # Observation matrix: we only measure rssi directly
