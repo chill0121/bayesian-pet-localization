@@ -10,7 +10,7 @@
   - Hardware: None
   - Dependencies: —
 
-- [ ] **3. Feature engineering pipeline** — Delta RSSI, anchor rankings, rolling variance, cross-floor attenuation features. Build as standalone module.
+- [X] **3. Feature engineering pipeline** — Delta RSSI, anchor rankings, rolling variance, cross-floor attenuation features. Build as standalone module.
   - Hardware: None
   - Dependencies: —
 
@@ -22,7 +22,7 @@
   - Hardware: None
   - Dependencies: —
 
-- [ ] **6. Random Forest classifier skeleton** — `services/inference/models/classifier.py`. Training + prediction interface, feature pipeline integration. Can't train yet but can build scaffolding.
+- [X] **6. Random Forest classifier skeleton** — `services/inference/models/classifier.py`. Training + prediction interface, feature pipeline integration. Can't train yet but can build scaffolding.
   - Hardware: None
   - Dependencies: #3
 
@@ -30,7 +30,7 @@
   - Hardware: None
   - Dependencies: —
 
-- [ ] **8. Site survey collection script** — `scripts/site_survey.py`. CLI tool to record labeled RSSI vectors at grid positions, store in PostgreSQL `fingerprint_samples` table. Build now, use later.
+- [X] **8. Site survey collection script** — `scripts/site_survey.py`. CLI tool to record labeled RSSI vectors at grid positions, store in PostgreSQL `fingerprint_samples` table. Build now, use later.
   - Hardware: None (to write)
   - Dependencies: #7
 
@@ -123,3 +123,33 @@
 - [ ] **28. Deploy to Raspberry Pi** — Move Docker stack from dev machine to Pi for permanent operation.
   - Hardware: **Raspberry Pi 4/5**
   - Dependencies: #24
+
+## Phase 7: Post-Validation Improvements (after #24 baseline)
+
+- [ ] **29. Hierarchical classifier** — If flat RF accuracy is poor on same-floor rooms, switch to two-stage: floor classifier → per-floor room classifier. Evaluate against flat model.
+  - Hardware: None
+  - Dependencies: #21, #24
+
+- [ ] **30. RF → Particle fusion (Option B)** — Use RF per-room probability distribution as a likelihood term to re-weight particles, replacing simple confidence-threshold override. Tighter Bayesian integration.
+  - Hardware: None
+  - Dependencies: #21, #24
+
+- [ ] **31. Anchor dropout indicators** — If classifier accuracy suffers from missing anchors, add `heard_<anchor>` binary features (0/1) per anchor to the feature vector. Gives RF explicit dropout signal.
+  - Hardware: None
+  - Dependencies: #21
+
+- [ ] **32. Concept drift detection** — Monitor RF prediction vs. polygon label disagreement rate over time. Flag for retraining when disagreement exceeds threshold. Periodic re-survey cadence.
+  - Hardware: None
+  - Dependencies: #24
+
+- [ ] **33. Hyperparameter grid search** — If baseline RF accuracy is <80%, sweep `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`. Use spatial CV to avoid overfitting to adjacent grid cells.
+  - Hardware: None
+  - Dependencies: #21
+
+- [ ] **34. Path loss calibration** — Use fingerprint data to fit environment-specific `TX_POWER`, path loss exponent `N`, and `RSSI_SIGMA` per anchor. Improves particle filter position accuracy.
+  - Hardware: None (data from #19)
+  - Dependencies: #22, #19
+
+- [ ] **35. POI proximity labeling** — Use particle filter (x, y) estimate + known POI coordinates to detect sub-room locations (e.g. "on dog bed", "near water bowl") via distance threshold. Separate from room classifier.
+  - Hardware: None
+  - Dependencies: #20, #24
