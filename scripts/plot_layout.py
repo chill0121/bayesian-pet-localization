@@ -323,6 +323,24 @@ def draw_floor(ax, floor_data, title, room_color_map=None, show_vertices=True):
                     bbox=dict(boxstyle='round,pad=0.1', facecolor='#fff0dd',
                               edgecolor=STAIRS_COLOR, alpha=0.9))
 
+    # Anchors (BLE receivers)
+    for anchor in floor_data.get('anchors', []):
+        pos = anchor['position']
+        aid = anchor.get('id', '')
+        height = anchor.get('height_ft', 0)
+        ax.plot(pos[0], pos[1], 'D', color='#cc0000', markersize=8,
+                markeredgecolor='white', markeredgewidth=1.2, zorder=12)
+        ax.annotate(f"{aid}\nh={height:.1f}ft",
+                    (pos[0], pos[1]),
+                    xytext=(pos[0] + 0.6, pos[1] + 0.6),
+                    fontsize=6, fontweight='bold', color='#cc0000',
+                    ha='left', va='bottom',
+                    bbox=dict(boxstyle='round,pad=0.2', facecolor='#fff0f0',
+                              edgecolor='#cc0000', alpha=0.9),
+                    arrowprops=dict(arrowstyle='->', color='#cc0000',
+                                   lw=1.0, shrinkA=0, shrinkB=3),
+                    zorder=12)
+
     # Finalize axes
     pad = 1.5
     ax.set_xlim(min(all_xs) - pad, max(all_xs) + pad)

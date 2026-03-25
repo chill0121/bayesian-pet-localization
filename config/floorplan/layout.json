@@ -275,19 +275,22 @@
         {
           "id": "1F_Office",
           "position": [
-            3.75,
-            6.5
+            3.77,
+            11.31
           ],
-          "height_ft": 1,
+          "height_ft": 1.06,
           "mac": "D0:CF:13:0E:C8:90",
-          "_note": "AtomS3 Lite — 1F Office, North wall next to Luna's bed"
+          "_note": "AtomS3 Lite — 1F Office, wall O.C-O.D, 45¼\" from west wall"
         },
         {
           "id": "1F_Hallway",
-          "position": [0, 0],
-          "height_ft": 1,
+          "position": [
+            7.01,
+            18.67
+          ],
+          "height_ft": 1.07,
           "mac": "E8:F6:0A:98:12:D4",
-          "_note": "AtomS3 Lite — 1F Hallway, position TBD"
+          "_note": "AtomS3 Lite — 1F Hallway, wall H.I-H.J, 8¾\" from H.I"
         }
       ],
       "stairs": [
@@ -649,32 +652,32 @@
         {
           "id": "2F_Living_SW",
           "position": [
-            2.0,
-            1.0
+            4.64,
+            0.0
           ],
-          "height_ft": 7.5,
+          "height_ft": 1.20,
           "mac": "E8:F6:0A:99:62:4C",
-          "_note": "AtomS3 Lite — 2F Living Room SW corner, position TBD"
+          "_note": "AtomS3 Lite — 2F Living Room, wall L.R-L.A, 55⅝\" from west wall"
         },
         {
           "id": "2F_Living_Center",
           "position": [
-            10.0,
-            14.0
+            3.47,
+            19.60
           ],
-          "height_ft": 7.5,
+          "height_ft": 1.01,
           "mac": "AC:A7:04:00:43:BC",
-          "_note": "AtomS3 Lite — 2F Living Room center, position TBD"
+          "_note": "AtomS3 Lite — 2F Living Room, wall L.M-L.N, 16⅞\" from L.M"
         },
         {
           "id": "2F_Kitchen_NE",
           "position": [
-            15.0,
-            26.0
+            17.70,
+            20.60
           ],
-          "height_ft": 7.5,
+          "height_ft": 3.71,
           "mac": "E8:F6:0A:98:A4:F0",
-          "_note": "AtomS3 Lite — 2F Kitchen NE corner, position TBD"
+          "_note": "AtomS3 Lite — 2F Kitchen, wall L.E-L.F, 105½\" from north outer boundary"
         }
       ],
       "stairs": [
@@ -1295,24 +1298,33 @@
       "anchors": [
         {
           "id": "3F_Master_Bed",
-          "position": [0, 0],
-          "height_ft": 1,
+          "position": [
+            10.67,
+            14.09
+          ],
+          "height_ft": 1.14,
           "mac": "E8:F6:0A:98:12:AC",
-          "_note": "AtomS3 Lite — 3F Master Bedroom, position TBD"
+          "_note": "AtomS3 Lite — 3F Master Bedroom, wall B.A-B.B, 45⁹⁄₁₆\" from B.A"
         },
         {
           "id": "3F_Hallway",
-          "position": [0, 0],
-          "height_ft": 1,
+          "position": [
+            3.35,
+            19.84
+          ],
+          "height_ft": 1.03,
           "mac": "AC:A7:04:00:41:00",
-          "_note": "AtomS3 Lite — 3F Hallway, position TBD"
+          "_note": "AtomS3 Lite — 3F Hallway, wall H.H-H.G, 50⁷⁄₁₆\" from H.H"
         },
         {
           "id": "3F_Wifes_Office",
-          "position": [0, 0],
-          "height_ft": 1,
+          "position": [
+            10.38,
+            19.48
+          ],
+          "height_ft": 1.02,
           "mac": "AC:A7:04:03:E9:74",
-          "_note": "AtomS3 Lite — 3F Wife's Office, position TBD"
+          "_note": "AtomS3 Lite — 3F Wife's Office, wall W.B-W.C, 41¹⁵⁄₁₆\" from W.C"
         }
       ],
       "stairs": [

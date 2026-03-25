@@ -101,14 +101,14 @@ INSERT INTO floors (floor_number, name, outer_boundary) VALUES
     (3, 'Third Floor',  '[[0,29.39],[17.7,29.39],[17.7,2.07],[6.85,2.07],[6.85,0],[0,0]]')
 ON CONFLICT (floor_number) DO NOTHING;
 
--- Seed anchor positions from layout.json (TODO #16: update x,y after measuring placements)
+-- Seed anchor positions from layout.json
 INSERT INTO anchors (anchor_id, floor, x, y, height_ft) VALUES
-    ('1f_office',         1,  3.75,  6.50, 1.0),
-    ('1f_hallway',        1,  0.00,  0.00, 7.5),
-    ('2f_living_sw',      2,  0.00,  0.00, 7.5),
-    ('2f_living_center',  2,  0.00,  0.00, 7.5),
-    ('2f_kitchen_ne',     2,  0.00,  0.00, 7.5),
-    ('3f_master_bed',     3,  0.00,  0.00, 7.5),
-    ('3f_hallway',        3,  0.00,  0.00, 7.5),
-    ('3f_wifes_office',   3,  0.00,  0.00, 7.5)
+    ('1f_office',         1,  3.77, 11.31, 1.06),
+    ('1f_hallway',        1,  7.01, 18.67, 1.07),
+    ('2f_living_sw',      2,  4.64,  0.00, 1.20),
+    ('2f_living_center',  2,  3.47, 19.60, 1.01),
+    ('2f_kitchen_ne',     2, 17.70, 20.60, 3.71),
+    ('3f_master_bed',     3, 10.67, 14.09, 1.14),
+    ('3f_hallway',        3,  3.35, 19.84, 1.03),
+    ('3f_wifes_office',   3, 10.38, 19.48, 1.02)
 ON CONFLICT (anchor_id) DO NOTHING;
