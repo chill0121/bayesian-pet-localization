@@ -279,7 +279,15 @@
             6.5
           ],
           "height_ft": 1,
+          "mac": "D0:CF:13:0E:C8:90",
           "_note": "AtomS3 Lite — 1F Office, North wall next to Luna's bed"
+        },
+        {
+          "id": "1F_Hallway",
+          "position": [0, 0],
+          "height_ft": 1,
+          "mac": "E8:F6:0A:98:12:D4",
+          "_note": "AtomS3 Lite — 1F Hallway, position TBD"
         }
       ],
       "stairs": [
@@ -639,49 +647,34 @@
       ],
       "anchors": [
         {
-          "id": "living_sw",
+          "id": "2F_Living_SW",
           "position": [
             2.0,
             1.0
           ],
           "height_ft": 7.5,
-          "_note": "placeholder"
+          "mac": "E8:F6:0A:99:62:4C",
+          "_note": "AtomS3 Lite — 2F Living Room SW corner, position TBD"
         },
         {
-          "id": "living_center",
+          "id": "2F_Living_Center",
           "position": [
             10.0,
             14.0
           ],
           "height_ft": 7.5,
-          "_note": "placeholder"
+          "mac": "AC:A7:04:00:43:BC",
+          "_note": "AtomS3 Lite — 2F Living Room center, position TBD"
         },
         {
-          "id": "kitchen_ne",
+          "id": "2F_Kitchen_NE",
           "position": [
             15.0,
             26.0
           ],
           "height_ft": 7.5,
-          "_note": "placeholder"
-        },
-        {
-          "id": "staircase_mid",
-          "position": [
-            1.48,
-            15.54
-          ],
-          "height_ft": 7.5,
-          "_note": "placeholder"
-        },
-        {
-          "id": "powder_room",
-          "position": [
-            2.37,
-            26.86
-          ],
-          "height_ft": 7.2,
-          "_note": "placeholder"
+          "mac": "E8:F6:0A:98:A4:F0",
+          "_note": "AtomS3 Lite — 2F Kitchen NE corner, position TBD"
         }
       ],
       "stairs": [
@@ -1299,7 +1292,29 @@
           ]
         }
       ],
-      "anchors": [],
+      "anchors": [
+        {
+          "id": "3F_Master_Bed",
+          "position": [0, 0],
+          "height_ft": 1,
+          "mac": "E8:F6:0A:98:12:AC",
+          "_note": "AtomS3 Lite — 3F Master Bedroom, position TBD"
+        },
+        {
+          "id": "3F_Hallway",
+          "position": [0, 0],
+          "height_ft": 1,
+          "mac": "AC:A7:04:00:41:00",
+          "_note": "AtomS3 Lite — 3F Hallway, position TBD"
+        },
+        {
+          "id": "3F_Wifes_Office",
+          "position": [0, 0],
+          "height_ft": 1,
+          "mac": "AC:A7:04:03:E9:74",
+          "_note": "AtomS3 Lite — 3F Wife's Office, position TBD"
+        }
+      ],
       "stairs": [
         {
           "to_floor": 2,
