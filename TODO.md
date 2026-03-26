@@ -40,49 +40,57 @@
 
 ## Phase 2B: Dashboard Enhancements (no hardware needed)
 
-- [ ] **10. Particle cloud visualization** — Show particle distribution on floor plan.
+- [X] **10. Particle cloud visualization** — Show particle distribution on floor plan.
   - Hardware: None
   - Dependencies: #4
 
-- [ ] **11. Position history trail** — Draw recent position path on floor plan.
+- [X] **11. Position history trail** — Draw recent position path on floor plan.
   - Hardware: None
   - Dependencies: —
 
-- [ ] **12. 24-hour residence heatmap** — Query InfluxDB/Postgres for historical dwell time.
+- [X] **12. 24-hour residence heatmap** — Query InfluxDB/Postgres for historical dwell time.
   - Hardware: None
   - Dependencies: #7
 
-- [ ] **13. Activity inference display** — Sleeping/Moving/Stationary from rolling variance.
+- [X] **13. Activity inference display** — Sleeping/Moving/Stationary from rolling variance.
   - Hardware: None
   - Dependencies: #3
 
 ## Phase 3: Hardware Deployment
 
-- [ ] **14. Purchase + flash remaining AtomS3 Lites** (9 units)
+- [X] **14. Purchase + flash remaining AtomS3 Lites** (9 units)
   - Hardware: **9× AtomS3 Lite**
   - Dependencies: —
 
-- [ ] **15. Deploy anchors across all 3 floors** — Mount, configure WiFi/MQTT/room names per `layout.json` anchor IDs.
+- [X] **15. Deploy anchors across all 3 floors** — Mount, configure WiFi/MQTT/room names per `layout.json` anchor IDs.
   - Hardware: **All AtomS3 Lites**
   - Dependencies: #14
 
-- [ ] **16. Update `layout.json` anchors** — Add real positions for all deployed anchors (measure from room corners).
+- [X] **16. Update `layout.json` anchors** — Add real positions for all deployed anchors (measure from room corners).
   - Hardware: **All anchors mounted**
   - Dependencies: #15
 
-- [ ] **17. Remove Floor 2 placeholder anchors** from `layout.json` — Replace with real positions.
+- [X] **17. Remove Floor 2 placeholder anchors** from `layout.json` — Replace with real positions.
   - Hardware: **Floor 2 anchors deployed**
   - Dependencies: #15
 
 ## Phase 4: Data Collection (all anchors required)
 
-- [ ] **18. Multi-anchor smoke test** — Verify all 10 anchors report RSSI for the beacon simultaneously.
+- [ ] **18. Multi-anchor smoke test** — Verify all anchors report RSSI for the beacon simultaneously.
   - Hardware: **All anchors + beacon**
   - Dependencies: #15
 
 - [ ] **19. Execute site survey** — Walk grid with beacon, run `site_survey.py` at each cell (60s per cell, rotate collar 360°).
   - Hardware: **All anchors + beacon**
   - Dependencies: #8, #18
+
+- [ ] **19.5 Use site survey data to calibrate inference & RSSI distance degradation (particle filter, constants, etc)** - After data collection we can verify wall attenuation calculations are accurate and calibrate particle filter as necessary. This should improve RSSI log loss calculations.
+  - Hardware: **All anchors + beacon**
+  - Dependencies: #8, #18, #19
+
+- [ ] **19.75 Normalize Signal Strength Visualizations with real sampled ranges** - Currently they are almost always in the red and orange ranges which doesn't reflect reality, giving much less visual info.
+  - Hardware: **All anchors + beacon**
+  - Dependencies: #8, #18, #19
 
 - [ ] **20. Labeled location collection** — Record RSSI at all POIs (couch, water bowl, dog beds, etc.) with extended dwell times.
   - Hardware: **All anchors + beacon**
@@ -150,6 +158,14 @@
   - Hardware: None (data from #19)
   - Dependencies: #22, #19
 
+- [x] **35. Client-side particle interpolation** — Add a `clientside_callback` with a fast `dcc.Interval` (~33ms) that linearly interpolates particle positions between inference snapshots, decoupling visual framerate from the 250ms inference tick. Store prev/current snapshots in `dcc.Store`, lerp in JS.
+  - Hardware: None
+  - Dependencies: —
+
 - [ ] **35. POI proximity labeling** — Use particle filter (x, y) estimate + known POI coordinates to detect sub-room locations (e.g. "on dog bed", "near water bowl") via distance threshold. Separate from room classifier.
   - Hardware: None
   - Dependencies: #20, #24
+
+- [ ] **36. RPi 5 performance benchmarking** — Profile full inference pipeline on Raspberry Pi 5 (Cortex-A76 @ 2.4GHz) and Mac (Apple Silicon). Measure `step()` latency, wall-crossing overhead, and max sustainable MQTT throughput. If step time exceeds 125ms budget (8 msg/sec), vectorize `count_wall_crossings` with numpy or precompute wall-crossing lookup table.
+  - Hardware: **Raspberry Pi 5**
+  - Dependencies: #28
