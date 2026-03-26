@@ -223,8 +223,8 @@ class TestForwardInference:
 
         # Strong signals from floor-2 anchors
         rssi = {
-            "living_center": -50.0,
-            "kitchen_ne": -55.0,
+            "2F_Living_Center": -50.0,
+            "2F_Kitchen_NE": -55.0,
         }
         hmm.update(rssi)
         belief = hmm.floor_belief
@@ -248,7 +248,7 @@ class TestForwardInference:
         data = _load_layout()
         anchors = _load_anchors()
         hmm = FloorTransitionHMM(data, anchors, initial_floor=2)
-        belief = hmm.step({"living_center": -55.0}, dt=1.0)
+        belief = hmm.step({"2F_Living_Center": -55.0}, dt=1.0)
         assert abs(sum(belief.values()) - 1.0) < 1e-10
         assert hmm.most_likely_floor == 2
 
@@ -261,7 +261,7 @@ class TestForwardInference:
 
         # Repeatedly observe strong floor-2 signals
         for _ in range(20):
-            hmm.step({"living_center": -50.0, "kitchen_ne": -52.0}, dt=1.0)
+            hmm.step({"2F_Living_Center": -50.0, "2F_Kitchen_NE": -52.0}, dt=1.0)
 
         belief = hmm.floor_belief
         assert belief[2] > 0.9
@@ -374,7 +374,7 @@ class TestParticleFilterIntegration:
         pf.initialise_uniform(floor=2)
 
         # Step should work without error
-        est = pf.step({"living_center": -55.0}, dt=1.0)
+        est = pf.step({"2F_Living_Center": -55.0}, dt=1.0)
         assert "floor" in est
         assert "x" in est
 
@@ -396,7 +396,7 @@ class TestParticleFilterIntegration:
         pf.initialise_uniform(floor=2)
 
         initial_belief = dict(hmm.floor_belief)
-        pf.step({"living_center": -50.0, "kitchen_ne": -52.0}, dt=1.0)
+        pf.step({"2F_Living_Center": -50.0, "2F_Kitchen_NE": -52.0}, dt=1.0)
         updated_belief = hmm.floor_belief
 
         # Belief should have changed after step

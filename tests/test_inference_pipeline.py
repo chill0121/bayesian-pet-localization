@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "services", "in
 from filters.kalman import KalmanFilterBank
 from filters.particle import ParticleFilter, extract_stairways, _expected_rssi
 from filters.floor_hmm import FloorTransitionHMM
+from filters.constants import FLOOR_ELEVATION_FT
 from occupancy import OccupancyGridSet, bounds_to_polygon, _point_in_polygon
 
 # ---------------------------------------------------------------------------
@@ -43,7 +44,10 @@ def _load_anchors(layout_data):
         floor_num = floor_data["floor"]
         for a in floor_data.get("anchors", []):
             pos = a.get("position", [0, 0])
-            anchors[a["id"]] = {"x": pos[0], "y": pos[1], "floor": floor_num}
+            anchors[a["id"]] = {
+                "x": pos[0], "y": pos[1], "floor": floor_num,
+                "height_ft": a.get("height_ft", 0.0),
+            }
     return anchors
 
 
@@ -95,12 +99,21 @@ def _label_room(x, y, floor, room_polygons, room_gates=None):
 
 
 def _simulate_rssi(beacon_x, beacon_y, beacon_floor, anchors, noise_sigma=4.0, rng=None):
-    """Generate simulated RSSI readings from all anchors for a known beacon position."""
+    """Generate simulated RSSI readings from all anchors for a known beacon position.
+
+    Uses 3D distance (with floor elevations) to match the particle filter's
+    observation model.
+    """
     if rng is None:
         rng = np.random.default_rng(42)
     readings = {}
+    beacon_z = FLOOR_ELEVATION_FT.get(beacon_floor, 0.0)
     for aid, apos in anchors.items():
-        dist_ft = math.sqrt((beacon_x - apos["x"])**2 + (beacon_y - apos["y"])**2)
+        dx = beacon_x - apos["x"]
+        dy = beacon_y - apos["y"]
+        anchor_z = FLOOR_ELEVATION_FT.get(apos["floor"], 0.0) + apos.get("height_ft", 0.0)
+        dz = beacon_z - anchor_z
+        dist_ft = math.sqrt(dx * dx + dy * dy + dz * dz)
         floor_diff = abs(beacon_floor - apos["floor"])
         expected = _expected_rssi(dist_ft, floor_diff)
         readings[aid] = expected + rng.normal(0, noise_sigma)

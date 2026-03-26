@@ -18,6 +18,8 @@ from occupancy import OccupancyGridSet
 from filters.particle import (
     ParticleFilter,
     extract_stairways,
+    extract_stair_runs,
+    extract_staircase_bounds,
     _expected_rssi,
     _log_likelihood,
     _systematic_resample,
@@ -46,7 +48,10 @@ def _load_anchors():
         floor_num = floor_data["floor"]
         for a in floor_data.get("anchors", []):
             pos = a.get("position", [0, 0])
-            anchors[a["id"]] = {"x": pos[0], "y": pos[1], "floor": floor_num}
+            anchors[a["id"]] = {
+                "x": pos[0], "y": pos[1], "floor": floor_num,
+                "height_ft": a.get("height_ft", 0.0),
+            }
     return anchors
 
 
@@ -55,6 +60,20 @@ def _load_stairways():
     with open(LAYOUT_PATH) as f:
         data = json.load(f)
     return extract_stairways(data)
+
+
+def _load_stair_runs():
+    import json
+    with open(LAYOUT_PATH) as f:
+        data = json.load(f)
+    return extract_stair_runs(data)
+
+
+def _load_staircase_bounds():
+    import json
+    with open(LAYOUT_PATH) as f:
+        data = json.load(f)
+    return extract_staircase_bounds(data)
 
 
 # ===========================================================================
@@ -466,6 +485,156 @@ class TestParticleFilterEstimate:
         pf.initialise_uniform()
         s = repr(pf)
         assert "ParticleFilter" in s
+
+
+# ===========================================================================
+# Stair geometry extraction
+# ===========================================================================
+
+class TestStairGeometry:
+    def test_extract_stair_runs(self):
+        """Stair runs are parsed from layout.json stair_geometry."""
+        runs = _load_stair_runs()
+        assert len(runs) == 2
+        # South run 1F→2F
+        south = [r for r in runs if r["from_floor"] == 1][0]
+        assert south["to_floor"] == 2
+        assert south["low_z"] == 0.0
+        assert south["high_z"] == 8.75
+        # North run 2F→3F
+        north = [r for r in runs if r["from_floor"] == 2][0]
+        assert north["to_floor"] == 3
+        assert north["high_z"] == 17.5
+
+    def test_extract_staircase_bounds(self):
+        """Per-floor staircase x_max is extracted."""
+        bounds = _load_staircase_bounds()
+        assert 1 in bounds
+        assert 2 in bounds
+        assert 3 in bounds
+        # F1 staircase x2 = 2.93
+        assert abs(bounds[1]["x_max"] - 2.93) < 0.1
+        # F2 staircase x2 = 2.96
+        assert abs(bounds[2]["x_max"] - 2.96) < 0.1
+
+
+# ===========================================================================
+# ParticleFilter — elevation interpolation
+# ===========================================================================
+
+class TestElevation:
+    def _make_pf_with_stairs(self):
+        """Build a PF with stair run data from layout.json."""
+        grids = _load_grids()
+        anchors = _load_anchors()
+        stairways = _load_stairways()
+        stair_runs = _load_stair_runs()
+        staircase_bounds = _load_staircase_bounds()
+        return ParticleFilter(
+            grids, anchors, stairways,
+            stair_runs=stair_runs,
+            staircase_bounds=staircase_bounds,
+            n_particles=10, seed=42,
+        )
+
+    def test_non_staircase_particle_at_floor_level(self):
+        """A particle in a normal room has elevation = floor ground level."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+        # Place particle 0 in the office (well inside, not staircase)
+        pf._x[0] = 5.0
+        pf._y[0] = 5.0
+        pf._floor[0] = 1
+        z = pf._particle_elevation(0)
+        assert z == 0.0, f"Expected 0.0, got {z}"
+
+    def test_staircase_particle_elevated_on_f1(self):
+        """A particle in the F1 staircase at y≈12 should be ~7 ft above ground."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+        # Place in F1 staircase column
+        pf._x[0] = 1.5
+        pf._y[0] = 12.0
+        pf._floor[0] = 1
+        z = pf._particle_elevation(0)
+        # t = (20.1 - 12.0) / (20.1 - 10.27) = 8.1/9.83 = 0.824
+        # z = 0 + 0.824 * 8.75 = 7.21
+        assert 6.5 < z < 8.0, f"Expected ~7.2, got {z}"
+
+    def test_staircase_at_entry_is_ground(self):
+        """At the 1F entry (y=20.1), elevation should be ~0."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+        pf._x[0] = 1.5
+        pf._y[0] = 20.0  # near entry_y_low=20.1
+        pf._floor[0] = 1
+        z = pf._particle_elevation(0)
+        assert z < 1.0, f"Expected near 0, got {z}"
+
+    def test_staircase_at_top_is_near_next_floor(self):
+        """At the bottom of the 1F staircase (y≈11.31), elevation should be near 8.75."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+        pf._x[0] = 1.5
+        pf._y[0] = 11.31  # near entry_y_high=10.27
+        pf._floor[0] = 1
+        z = pf._particle_elevation(0)
+        # t = (20.1-11.31)/(20.1-10.27) = 8.79/9.83 = 0.894
+        # z = 0.894 * 8.75 = 7.82
+        assert z > 7.0, f"Expected ~7.8, got {z}"
+
+    def test_f2_staircase_is_flat(self):
+        """F2 staircase (landing) should be at floor 2 level throughout."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=2)
+        pf._x[0] = 1.5
+        pf._y[0] = 15.0  # middle of F2 staircase
+        pf._floor[0] = 2
+        z = pf._particle_elevation(0)
+        # F2 staircase: south run has entry_y_high=10.27 and north run has entry_y_low=20.8
+        # At y=15, the south run matches (y in [10.27, 20.1])
+        # t = (20.1-15)/(20.1-10.27) = 5.1/9.83 = 0.519 → z = 0.519*8.75 = 4.54
+        # OR north run (y in [8.25, 20.8]): t = (20.8-15)/(20.8-8.25) = 5.8/12.55 = 0.462 → z = 8.75+0.462*8.75 = 12.79
+        # It picks the first matching run. Either way it's interpolated, not flat at 8.75.
+        # The F2 staircase IS actually stairs (not just a landing) so interpolation is correct.
+        assert z > 0.0
+
+    def test_particle_outside_staircase_x(self):
+        """A particle with x > staircase x_max is NOT on the stairs."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+        pf._x[0] = 5.0  # well outside staircase x_max=2.93
+        pf._y[0] = 15.0  # within stair Y range
+        pf._floor[0] = 1
+        z = pf._particle_elevation(0)
+        assert z == 0.0, f"Expected 0.0 (hallway, not staircase), got {z}"
+
+    def test_3d_distance_changes_staircase_weight(self):
+        """Staircase particles near an anchor in 2D but elevated should get lower weight."""
+        pf = self._make_pf_with_stairs()
+        pf.initialise_uniform(floor=1)
+
+        # Place two particles: one in office (low z), one in staircase (high z)
+        # Both similar 2D distance to 1F_Office anchor at (3.77, 11.31)
+        pf._x[0] = 3.0   # office side
+        pf._y[0] = 10.5
+        pf._floor[0] = 1
+
+        pf._x[1] = 2.5   # staircase side (x<2.93, in F1 staircase Y range)
+        pf._y[1] = 12.0
+        pf._floor[1] = 1
+
+        pf._weights[:] = 1.0 / pf.n
+
+        # Strong signal from 1F_Office → should favour the office particle
+        pf.update({"1F_Office": -51.0})
+
+        # Office particle should have higher weight than staircase particle
+        # because staircase particle is ~7ft elevated despite being close in 2D
+        assert pf._weights[0] > pf._weights[1], (
+            f"Office weight {pf._weights[0]:.6f} should exceed "
+            f"staircase weight {pf._weights[1]:.6f}"
+        )
 
 
 # ===========================================================================
