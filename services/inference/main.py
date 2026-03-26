@@ -23,12 +23,18 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from pydantic import BaseModel
 
 from filters.kalman import KalmanFilterBank
-from filters.particle import ParticleFilter, extract_stairways
+from filters.particle import (
+    ParticleFilter, extract_stairways, extract_stair_runs, extract_staircase_bounds,
+)
 from filters.floor_hmm import FloorTransitionHMM
 from occupancy import OccupancyGridSet, bounds_to_polygon, _point_in_polygon
 from db import Database
 from features import FeatureEngine
-from models.classifier import RoomClassifier
+
+try:
+    from models.classifier import RoomClassifier
+except ImportError:
+    RoomClassifier = None  # type: ignore[misc,assignment]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,6 +81,9 @@ ACTIVITY_STATIONARY_THRESHOLD = 0.45  # below → "stationary", above → "movin
 # Inference timing
 DEFAULT_DT = 0.5                  # assumed dt (seconds) for first inference cycle
 MAX_DT = 10.0                     # cap dt to avoid huge jumps after long gaps
+INFERENCE_MIN_INTERVAL = 0.25     # minimum seconds between inference cycles
+                                  # (dashboard can poll faster for diagnostics;
+                                  #  this only gates how often particles move)
 
 # In-memory ring buffer sizes
 POSITION_HISTORY_MAXLEN = 500
@@ -109,6 +118,7 @@ room_gates: dict[int, dict[str, list[dict]]] = {}
 
 # Timing: last inference timestamp for computing dt
 _last_inference_time: Optional[float] = None
+_last_inference_mono: float = 0.0  # monotonic clock for rate-limiting
 
 # Feature engineering pipeline
 feature_engine: Optional[FeatureEngine] = None
@@ -144,10 +154,14 @@ def load_floorplan():
                 floor_num = floor_data["floor"]
                 for anchor in floor_data.get("anchors", []):
                     pos = anchor.get("position", [anchor.get("x", 0), anchor.get("y", 0)])
-                    anchor_coords[anchor["id"]] = {
+                    # Normalise anchor ID to lowercase to match ESPresense
+                    # MQTT topic convention (espresense/devices/<dev>/<anchor>)
+                    anchor_id = anchor["id"].lower()
+                    anchor_coords[anchor_id] = {
                         "x": pos[0],
                         "y": pos[1],
                         "floor": floor_num,
+                        "height_ft": anchor.get("height_ft", 0.0),
                     }
             logger.info(f"Loaded {len(anchor_coords)} anchor positions from {path}")
             return
@@ -305,8 +319,15 @@ def on_message(client, userdata, msg):
                 # Write to InfluxDB
                 write_rssi_to_influxdb(device_id, anchor_id, rssi_val, distance_val)
                 
-                # Trigger inference
-                run_inference(device_id)
+                # Rate-limit inference: only run if enough time has
+                # elapsed since the last cycle.  RSSI buffer still
+                # accumulates on every message so the next cycle sees
+                # the freshest readings from all anchors.
+                now_mono = time.monotonic()
+                if (_last_inference_time is None
+                        or now_mono - _last_inference_mono
+                        >= INFERENCE_MIN_INTERVAL):
+                    run_inference(device_id)
             
             # Log all devices periodically for discovery
             if message_count % 50 == 0:
@@ -408,13 +429,14 @@ def run_inference(device_id: str):
     4. Read position estimate and determine room label
     5. Update current_position
     """
-    global current_position, _last_inference_time
+    global current_position, _last_inference_time, _last_inference_mono
 
     readings = rssi_buffer.get(device_id, {})
     if not readings:
         return
 
     now = time.time()
+    now_mono = time.monotonic()
 
     # --- 1. Raw RSSI vector ---------------------------------------------------
     rssi_vector = {anchor: data["rssi"] for anchor, data in readings.items()}
@@ -447,6 +469,7 @@ def run_inference(device_id: str):
     estimate = particle_filter.step(smoothed_rssi, dt)
 
     _last_inference_time = now
+    _last_inference_mono = now_mono
 
     # --- 5. Room label --------------------------------------------------------
     polygon_label = _label_room(estimate["x"], estimate["y"], estimate["floor"])
@@ -741,6 +764,25 @@ async def get_stats():
     return stats
 
 
+@app.get("/particles")
+async def get_particles():
+    """Get current particle positions and weights for visualization."""
+    if particle_filter is None:
+        raise HTTPException(status_code=503, detail="Particle filter not initialized")
+
+    parts = particle_filter.particles
+    wts = particle_filter.weights
+
+    return {
+        "x": parts[:, 0].tolist(),
+        "y": parts[:, 1].tolist(),
+        "floor": parts[:, 2].astype(int).tolist(),
+        "weight": wts.tolist(),
+        "n_particles": len(parts),
+        "estimate": particle_filter.estimate,
+    }
+
+
 # -----------------------------------------------------------------------------
 # Startup
 # -----------------------------------------------------------------------------
@@ -806,10 +848,14 @@ async def startup_event():
     # Particle filter (needs occupancy grids + anchors + stairways + HMM)
     if occupancy_grids and anchor_coords:
         stairways = extract_stairways(floorplan_data)
+        stair_runs = extract_stair_runs(floorplan_data)
+        staircase_bounds = extract_staircase_bounds(floorplan_data)
         particle_filter = ParticleFilter(
             occupancy_grids=occupancy_grids,
             anchor_positions=anchor_coords,
             stairways=stairways,
+            stair_runs=stair_runs,
+            staircase_bounds=staircase_bounds,
             floor_hmm=floor_hmm,
             n_particles=N_PARTICLES,
         )
