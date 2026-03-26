@@ -169,17 +169,32 @@ class TestWalkability:
 
 class TestAnchorWalkability:
 
-    def test_all_anchors_walkable(self):
-        """Every anchor position from layout.json should be on a walkable cell."""
+    def test_all_anchors_near_walkable(self):
+        """Every anchor should be on or adjacent to a walkable cell.
+
+        Anchors are physically mounted on walls, so at grid resolution
+        they often land in blocked cells.  We verify the anchor is not
+        floating in the void — at least one neighbouring cell must be
+        walkable.
+        """
         layout = _load_layout()
         grids = OccupancyGridSet.from_layout_data(layout)
         for floor_data in layout["floors"]:
             floor_num = floor_data["floor"]
+            grid = grids[floor_num]
             for anchor in floor_data.get("anchors", []):
                 pos = anchor["position"]
-                assert grids[floor_num].is_walkable(pos[0], pos[1]), (
+                r, c = grid.world_to_grid(pos[0], pos[1])
+                # Check the cell itself plus its 8-connected neighbours
+                nearby_walkable = grid.is_walkable_grid(r, c)
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nearby_walkable = nearby_walkable or grid.is_walkable_grid(r + dr, c + dc)
+                assert nearby_walkable, (
                     f"Anchor {anchor['id']} at ({pos[0]}, {pos[1]}) on floor {floor_num} "
-                    f"is not walkable"
+                    f"is not near any walkable cell"
                 )
 
 

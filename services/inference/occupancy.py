@@ -235,6 +235,10 @@ class OccupancyGrid:
         and blocks them, creating a 1-cell wall between every pair of rooms.
         Doorway carving (run afterwards) punches holes back through at door
         and stair-opening locations.
+
+        Only the higher-indexed cell (north for row adjacency, east for
+        column adjacency) is blocked, keeping walls 1-cell (0.5 ft) wide
+        and preserving room interiors on the lower-indexed side.
         """
         walkable_rooms = [room for room in rooms if room.get("walkable", True)]
         if len(walkable_rooms) < 2:
@@ -255,7 +259,8 @@ class OccupancyGrid:
                         room_id[r, c] = idx
                         break
 
-        # Find boundary cells: adjacent walkable cells belonging to different rooms
+        # Find boundary cells: adjacent walkable cells belonging to different rooms.
+        # Block only the higher-indexed neighbor to keep walls 1-cell wide.
         to_block = set()
         for r in range(self.height_cells):
             for c in range(self.width_cells):
@@ -269,8 +274,7 @@ class OccupancyGrid:
                     nrid = room_id[nr, nc]
                     if nrid < 0 or rid == nrid:
                         continue
-                    # Two different rooms touch — block both boundary cells
-                    to_block.add((r, c))
+                    # Two different rooms touch — block only the higher-indexed cell
                     to_block.add((nr, nc))
 
         for r, c in to_block:
@@ -311,6 +315,44 @@ class OccupancyGrid:
             return bool(self.grid[row, col])
         return False
 
+    def nearest_walkable(self, x: float, y: float) -> tuple[float, float]:
+        """Return the center of the nearest walkable cell to (x, y).
+
+        If (x, y) itself is walkable, returns the center of that cell.
+        Otherwise searches outward in a BFS-like ring expansion.
+        Useful for snapping wall-mounted anchor positions to their
+        room's interior for ray-tracing purposes.
+
+        Raises ValueError if no walkable cell is found (empty grid).
+        """
+        r0, c0 = self.world_to_grid(x, y)
+        if self.is_walkable_grid(r0, c0):
+            return self.grid_to_world(r0, c0)
+
+        # BFS ring search: expand distance until we find a walkable cell.
+        # Track the best candidate (closest Euclidean to original point).
+        best = None
+        best_dist2 = float('inf')
+        max_radius = max(self.height_cells, self.width_cells)
+        for radius in range(1, max_radius + 1):
+            found_any = False
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if abs(dr) != radius and abs(dc) != radius:
+                        continue  # only check the ring perimeter
+                    nr, nc = r0 + dr, c0 + dc
+                    if not self.is_walkable_grid(nr, nc):
+                        continue
+                    found_any = True
+                    wx, wy = self.grid_to_world(nr, nc)
+                    d2 = (wx - x) ** 2 + (wy - y) ** 2
+                    if d2 < best_dist2:
+                        best_dist2 = d2
+                        best = (wx, wy)
+            if found_any:
+                return best  # closest walkable cell at this radius
+        raise ValueError("No walkable cell found on this floor")
+
     def ray_clear(self, x1: float, y1: float, x2: float, y2: float) -> bool:
         """Return True if all cells on the line from (x1,y1) to (x2,y2) are walkable.
 
@@ -340,6 +382,59 @@ class OccupancyGrid:
                 err += dc
                 r += sr
         return True
+
+    def count_wall_crossings(self, x1: float, y1: float, x2: float, y2: float) -> int:
+        """Count the number of walls a ray crosses between two points.
+
+        Uses Bresenham's line algorithm in grid space and counts transitions
+        from walkable (True) to blocked (False) cells.  Each transition
+        represents entering a wall boundary.
+
+        Because anchors (typical endpoints) are physically mounted on walls,
+        the endpoint cell is often blocked.  Callers should use
+        ``nearest_walkable()`` to snap anchor positions to their room
+        interior before calling this method for accurate results.
+
+        Parameters
+        ----------
+        x1, y1 : float
+            Start point in world coordinates (feet).
+        x2, y2 : float
+            End point in world coordinates (feet).
+
+        Returns
+        -------
+        int
+            Number of wall crossings along the ray.
+        """
+        r1, c1 = self.world_to_grid(x1, y1)
+        r2, c2 = self.world_to_grid(x2, y2)
+
+        dr = abs(r2 - r1)
+        dc = abs(c2 - c1)
+        sr = 1 if r2 > r1 else -1
+        sc = 1 if c2 > c1 else -1
+        err = dc - dr
+
+        crossings = 0
+        prev_walkable = True  # assume start is walkable (particle position)
+        r, c = r1, c1
+        while True:
+            cur_walkable = self.is_walkable_grid(r, c)
+            if prev_walkable and not cur_walkable:
+                crossings += 1
+            prev_walkable = cur_walkable
+            if r == r2 and c == c2:
+                break
+            e2 = 2 * err
+            if e2 > -dr:
+                err -= dr
+                c += sc
+            if e2 < dc:
+                err += dc
+                r += sr
+
+        return crossings
 
     @property
     def walkable_fraction(self) -> float:
@@ -421,6 +516,17 @@ class OccupancyGridSet:
         if floor not in self._grids:
             return False
         return self._grids[floor].is_walkable(x, y)
+
+    def count_wall_crossings(self, floor: int, x1: float, y1: float,
+                             x2: float, y2: float) -> int:
+        """Count wall crossings on a given floor."""
+        if floor not in self._grids:
+            return 0
+        return self._grids[floor].count_wall_crossings(x1, y1, x2, y2)
+
+    def nearest_walkable(self, floor: int, x: float, y: float) -> tuple[float, float]:
+        """Snap a point to the nearest walkable cell on a given floor."""
+        return self._grids[floor].nearest_walkable(x, y)
 
     def __repr__(self):
         parts = [repr(self._grids[f]) for f in self.floors]
