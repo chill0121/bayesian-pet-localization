@@ -58,7 +58,7 @@ import numpy as np
 from .constants import (
     TX_POWER_DBM,
     PATH_LOSS_N,
-    CROSS_FLOOR_PENALTY_FT,
+    FLOOR_ATTENUATION_DB,
     MIN_DISTANCE_FT,
 )
 
@@ -91,11 +91,17 @@ MAX_TRANSITION_PROB_CAP = 0.3
 # ---------------------------------------------------------------------------
 
 def _expected_rssi(distance_ft: float, floor_diff: int = 0) -> float:
-    """Log-distance path-loss expected RSSI (mirrors particle.py)."""
-    effective_ft = distance_ft + floor_diff * CROSS_FLOOR_PENALTY_FT
-    effective_ft = max(effective_ft, MIN_DISTANCE_FT)
-    distance_m = effective_ft * 0.3048
-    return TX_POWER_DBM - 10.0 * PATH_LOSS_N * math.log10(distance_m)
+    """Log-distance path-loss expected RSSI (mirrors particle.py).
+
+    Uses a direct dB floor attenuation penalty that is independent of
+    PATH_LOSS_N, avoiding over-penalising cross-floor anchors when N
+    is large.
+    """
+    distance_ft = max(distance_ft, MIN_DISTANCE_FT)
+    distance_m = distance_ft * 0.3048
+    return (TX_POWER_DBM
+            - 10.0 * PATH_LOSS_N * math.log10(distance_m)
+            - floor_diff * FLOOR_ATTENUATION_DB)
 
 
 def _emission_log_likelihood(

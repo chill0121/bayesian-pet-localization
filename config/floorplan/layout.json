@@ -338,7 +338,7 @@
       "rooms": [
         {
           "name": "living_kitchen",
-          "label": "Living Room & Kitchen (open plan)",
+          "label": "Living Room & Kitchen",
           "vertex_prefix": "L",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -1341,6 +1341,37 @@
       ]
     }
   ],
+  "stair_geometry": {
+    "_note": "Measured 2025-03: 14 risers × 7.5 in per run = 8.75 ft rise. U-shaped switchback. 2F→3F has L-shape at top (12 steps south, 2 steps east), simplified to linear Y.",
+    "riser_height_in": 7.5,
+    "risers_per_run": 14,
+    "rise_per_run_ft": 8.75,
+    "floor_elevations_ft": {
+      "1": 0.0,
+      "2": 8.75,
+      "3": 17.5
+    },
+    "runs": [
+      {
+        "from_floor": 1,
+        "to_floor": 2,
+        "low_z": 0.0,
+        "high_z": 8.75,
+        "entry_y_low": 20.1,
+        "entry_y_high": 10.27,
+        "_note": "South run: enter at y=20.1 (1F), climb going south, arrive y=10.27 (2F). Y decreases as Z increases."
+      },
+      {
+        "from_floor": 2,
+        "to_floor": 3,
+        "low_z": 8.75,
+        "high_z": 17.5,
+        "entry_y_low": 20.8,
+        "entry_y_high": 8.25,
+        "_note": "North run: enter at y=20.8 (2F), climb going south, arrive y~8.25 (3F). Last 2 steps are east-facing (L-shape) but linearized over Y."
+      }
+    ]
+  },
   "beacon": {
     "id": "dog_collar",
     "name": "Dog Collar Beacon",

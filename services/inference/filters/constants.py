@@ -10,7 +10,12 @@ ensure consistency when tuning.
 # RSSI path-loss model
 # ---------------------------------------------------------------------------
 TX_POWER_DBM: float = -59.0          # measured BLE transmit power at 1 m (dBm)
-PATH_LOSS_N: float = 2.7             # path-loss exponent (indoor BLE)
+PATH_LOSS_N: float = 3.5             # path-loss exponent (indoor residential)
 RSSI_SIGMA: float = 5.0              # observation noise std-dev (dBm)
-CROSS_FLOOR_PENALTY_FT: float = 30.0 # effective extra distance per floor diff (ft)
+CROSS_FLOOR_PENALTY_FT: float = 30.0 # (deprecated) kept for floor_hmm compat
+FLOOR_ATTENUATION_DB: float = 3.0    # dB penalty per floor crossed (floor slab attenuation)
 MIN_DISTANCE_FT: float = 1.0         # clamp minimum distance to avoid log(0) (ft)
+WALL_ATTENUATION_DB: float = 10.0    # RSSI penalty per interior wall crossing (dBm)
+
+# Floor elevations (measured: 14 risers × 7.5" = 8.75 ft per run)
+FLOOR_ELEVATION_FT: dict[int, float] = {1: 0.0, 2: 8.75, 3: 17.5}
