@@ -1,19 +1,27 @@
 """
-Random Forest Room/Zone Classifier for Bayesian Pet Localization
+Random Forest Sub-Zone Classifier for Bayesian Pet Localization
 
-Predicts floor-qualified room labels (e.g. "2F_kitchen", "3F_master_bed")
+Predicts sub-zone labels (e.g. "office_dog_bed", "kitchen_peninsula")
 from RSSI-derived feature vectors produced by :class:`features.FeatureEngine`.
+
+Designed for hierarchical fusion: the particle filter determines the room
+via polygon lookup, then this classifier refines to a sub-zone within
+that room.  Each zone label maps to a parent room via the ``zone_to_room``
+mapping stored with the model.
 
 Training
 --------
 Load fingerprint samples from PostgreSQL, extract features, optionally
 augment, then fit a :class:`sklearn.ensemble.RandomForestClassifier`.
+Samples provide a ``zone_label`` (sub-zone name), ``room`` (parent room),
+and ``floor`` (for feature context).
 
 Prediction
 ----------
 Given a feature dict (from ``FeatureEngine.update()``), assemble the
 feature vector in canonical order, impute missing anchors with sentinel
-values, and return ``(label, confidence, probabilities)``.
+values.  Use ``predict_for_room()`` for hierarchical fusion (filters and
+renormalises probabilities to zones within the particle-determined room).
 
 Persistence
 -----------
@@ -42,8 +50,14 @@ logger = logging.getLogger(__name__)
 MISSING_RSSI_SENTINEL: float = -100.0
 
 
-class RoomClassifier:
-    """Random Forest room/zone classifier.
+class ZoneClassifier:
+    """Random Forest sub-zone classifier.
+
+    Predicts sub-zone labels (e.g. ``"office_dog_bed"``,
+    ``"kitchen_peninsula"``) from RSSI-derived feature vectors.
+    Each zone maps to a parent room via :attr:`zone_to_room`.  Use
+    :meth:`predict_for_room` for hierarchical fusion where the
+    particle filter determines the room.
 
     Parameters
     ----------
@@ -62,7 +76,8 @@ class RoomClassifier:
         self._anchor_ids: list[str] = sorted(anchor_ids)
         self._feature_names: list[str] = self._build_feature_names()
         self._model: Optional[RandomForestClassifier] = None
-        self._classes: Optional[np.ndarray] = None  # floor-qualified labels
+        self._classes: Optional[np.ndarray] = None  # zone labels
+        self._zone_to_room: dict[str, str] = {}  # zone_label → parent room
 
         if model_path is not None:
             self.load(model_path)
@@ -217,9 +232,14 @@ class RoomClassifier:
         """Train on fingerprint sample dicts from the database.
 
         Each sample dict must contain at minimum:
-        - ``"location_label"`` (str): room name (e.g. ``"kitchen"``)
+        - ``"zone_label"`` (str): sub-zone name (e.g. ``"office_dog_bed"``)
+        - ``"room"`` (str): parent room name (e.g. ``"office"``)
         - ``"floor"`` (int): floor number
         - ``"rssi_vector"`` (dict): ``{anchor_id: mean_rssi, ...}``
+
+        For backward compatibility, if ``"zone_label"`` is missing, falls
+        back to ``"location_label"``.  If ``"room"`` is missing, the zone
+        label is used as the room name (degenerate: zone == room).
 
         Optionally:
         - ``"features"`` (dict): pre-computed FeatureEngine output.
@@ -249,15 +269,22 @@ class RoomClassifier:
         # -- Build X, y --------------------------------------------------------
         X_rows = []
         y_labels = []
+        zone_to_room: dict[str, str] = {}
 
         for sample in samples:
-            label = f"{sample['floor']}F_{sample['location_label']}"
+            # Sub-zone label (falls back to location_label for compat)
+            zone = sample.get("zone_label", sample.get("location_label", "unknown"))
+            room = sample.get("room", zone)
+            zone_to_room[zone] = room
+
             rssi_vec = sample.get("rssi_vector", {})
             feat_dict = sample.get("features", {})
 
             vec = self._assemble_vector(feat_dict, smoothed_rssi=rssi_vec)
             X_rows.append(vec)
-            y_labels.append(label)
+            y_labels.append(zone)
+
+        self._zone_to_room = zone_to_room
 
         X = np.array(X_rows, dtype=np.float64)
         y = np.array(y_labels)
@@ -366,7 +393,7 @@ class RoomClassifier:
         features: dict,
         smoothed_rssi: Optional[dict] = None,
     ) -> tuple[str, float, dict]:
-        """Predict room label from a feature dict.
+        """Predict zone label from a feature dict (all zones).
 
         Parameters
         ----------
@@ -378,7 +405,7 @@ class RoomClassifier:
         Returns
         -------
         label : str
-            Floor-qualified label, e.g. ``"2F_kitchen"``.
+            Zone label, e.g. ``"office_dog_bed"`` or ``"kitchen"``.
         confidence : float
             Probability of the predicted class (0–1).
         probabilities : dict
@@ -398,6 +425,56 @@ class RoomClassifier:
         }
         return label, confidence, probabilities
 
+    def predict_for_room(
+        self,
+        features: dict,
+        smoothed_rssi: Optional[dict] = None,
+        room: str = "",
+    ) -> tuple[Optional[str], float, dict]:
+        """Predict sub-zone scoped to a specific room.
+
+        Filters RF probabilities to only zones belonging to the given
+        room (via ``zone_to_room`` mapping), then renormalises.  This
+        is the primary prediction method for hierarchical fusion where
+        the particle filter determines the room.
+
+        Parameters
+        ----------
+        features : dict
+            Output of ``FeatureEngine.update()``.
+        smoothed_rssi : dict | None
+            anchor_id → smoothed RSSI.
+        room : str
+            Parent room name from the particle filter's polygon lookup
+            (e.g. ``"kitchen"``, ``"office"``).
+
+        Returns
+        -------
+        label : str | None
+            Best zone within the room, or ``None`` if no zones match.
+        confidence : float
+            Renormalised probability of the best zone (0–1).
+        probabilities : dict
+            ``{zone: probability}`` for zones in this room (renormalised).
+        """
+        _, _, all_probs = self.predict(features, smoothed_rssi)
+
+        # Filter to zones belonging to this room
+        scoped = {
+            z: p for z, p in all_probs.items()
+            if self._zone_to_room.get(z) == room
+        }
+        if not scoped:
+            return None, 0.0, {}
+
+        # Renormalise
+        total = sum(scoped.values())
+        if total > 0:
+            scoped = {z: round(p / total, 4) for z, p in scoped.items()}
+
+        best = max(scoped, key=scoped.get)
+        return best, scoped[best], scoped
+
     @property
     def is_trained(self) -> bool:
         """Whether a model is loaded and ready for prediction."""
@@ -406,6 +483,11 @@ class RoomClassifier:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
+
+    @property
+    def zone_to_room(self) -> dict[str, str]:
+        """Zone label → parent room name mapping."""
+        return dict(self._zone_to_room)
 
     def save(self, path: str) -> None:
         """Serialize trained model + metadata to a joblib file."""
@@ -416,6 +498,7 @@ class RoomClassifier:
             "feature_names": self._feature_names,
             "anchor_ids": self._anchor_ids,
             "classes": self._classes.tolist(),
+            "zone_to_room": self._zone_to_room,
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(artifact, path)
@@ -428,21 +511,32 @@ class RoomClassifier:
         self._feature_names = artifact["feature_names"]
         self._anchor_ids = artifact["anchor_ids"]
         self._classes = np.array(artifact["classes"])
+        # zone_to_room introduced in sub-zone refactor; compat with older models
+        self._zone_to_room = artifact.get("zone_to_room", {})
+        if not self._zone_to_room:
+            # Legacy model: each class label IS the room (no sub-zones)
+            for cls in self._classes:
+                self._zone_to_room[str(cls)] = str(cls)
         logger.info(
-            "Loaded RF model from %s (%d classes, %d features)",
+            "Loaded RF model from %s (%d classes, %d features, %d rooms)",
             path,
             len(self._classes),
             len(self._feature_names),
+            len(set(self._zone_to_room.values())),
         )
 
     @classmethod
-    def from_file(cls, path: str) -> "RoomClassifier":
-        """Factory: create a RoomClassifier from a saved model file."""
+    def from_file(cls, path: str) -> "ZoneClassifier":
+        """Factory: create a ZoneClassifier from a saved model file."""
         artifact = joblib.load(path)
         instance = cls(anchor_ids=artifact["anchor_ids"])
         instance._model = artifact["model"]
         instance._feature_names = artifact["feature_names"]
         instance._classes = np.array(artifact["classes"])
+        instance._zone_to_room = artifact.get("zone_to_room", {})
+        if not instance._zone_to_room:
+            for c in instance._classes:
+                instance._zone_to_room[str(c)] = str(c)
         return instance
 
     # ------------------------------------------------------------------
@@ -468,7 +562,7 @@ class RoomClassifier:
 
     @property
     def classes(self) -> list[str]:
-        """List of floor-qualified class labels."""
+        """List of zone class labels."""
         if self._classes is None:
             return []
         return [str(c) for c in self._classes]
@@ -481,7 +575,12 @@ class RoomClassifier:
     def __repr__(self) -> str:
         status = "trained" if self._model is not None else "untrained"
         n_cls = len(self._classes) if self._classes is not None else 0
+        n_rooms = len(set(self._zone_to_room.values())) if self._zone_to_room else 0
         return (
-            f"RoomClassifier({status}, anchors={len(self._anchor_ids)}, "
-            f"features={len(self._feature_names)}, classes={n_cls})"
+            f"ZoneClassifier({status}, anchors={len(self._anchor_ids)}, "
+            f"features={len(self._feature_names)}, zones={n_cls}, rooms={n_rooms})"
         )
+
+
+# Backwards-compatible alias
+RoomClassifier = ZoneClassifier

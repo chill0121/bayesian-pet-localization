@@ -1,3 +1,3 @@
-from .classifier import RoomClassifier
+from .classifier import ZoneClassifier, RoomClassifier
 
-__all__ = ["RoomClassifier"]
+__all__ = ["ZoneClassifier", "RoomClassifier"]
