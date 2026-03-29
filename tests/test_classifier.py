@@ -1,5 +1,5 @@
 """
-Tests for the Random Forest room classifier.
+Tests for the Random Forest zone classifier.
 
 Run with: python -m pytest tests/test_classifier.py -v
 """
@@ -16,7 +16,7 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "services", "inference")
 )
 
-from models.classifier import RoomClassifier, MISSING_RSSI_SENTINEL
+from models.classifier import ZoneClassifier, RoomClassifier, MISSING_RSSI_SENTINEL
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -34,71 +34,85 @@ ANCHOR_IDS = [
 ]
 
 # Synthetic fingerprint samples that mimic DB rows from fingerprint_samples
-# Each sample: location_label, floor, rssi_vector dict
+# Each sample: zone_label, room, floor, rssi_vector dict
+# Office has two sub-zones (office_desk, office_dog_bed) to test scoping.
 SYNTHETIC_SAMPLES = [
-    # Floor 1 — office (close to 1F_Office anchor)
-    {"location_label": "office", "floor": 1,
-     "rssi_vector": {"1F_Office": -45, "1F_Hallway": -60, "living_sw": -80, "staircase_mid": -82},
+    # office — sub-zone: office_desk (closer to 1F_Office anchor)
+    {"zone_label": "office_desk", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -45, "1F_Hallway": -62, "living_sw": -80, "staircase_mid": -82},
      "features": {}},
-    {"location_label": "office", "floor": 1,
-     "rssi_vector": {"1F_Office": -47, "1F_Hallway": -62, "living_sw": -81, "staircase_mid": -84},
+    {"zone_label": "office_desk", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -47, "1F_Hallway": -64, "living_sw": -81, "staircase_mid": -84},
      "features": {}},
-    {"location_label": "office", "floor": 1,
-     "rssi_vector": {"1F_Office": -44, "1F_Hallway": -58, "living_sw": -79, "staircase_mid": -83},
+    {"zone_label": "office_desk", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -44, "1F_Hallway": -60, "living_sw": -79, "staircase_mid": -83},
      "features": {}},
-    {"location_label": "office", "floor": 1,
-     "rssi_vector": {"1F_Office": -46, "1F_Hallway": -61, "living_sw": -82, "staircase_mid": -85},
+    {"zone_label": "office_desk", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -46, "1F_Hallway": -63, "living_sw": -82, "staircase_mid": -85},
      "features": {}},
-    # Floor 1 — hallway (close to 1F_Hallway anchor)
-    {"location_label": "hallway", "floor": 1,
+    # office — sub-zone: office_dog_bed (between office and hallway anchors)
+    {"zone_label": "office_dog_bed", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -53, "1F_Hallway": -54, "living_sw": -79, "staircase_mid": -78},
+     "features": {}},
+    {"zone_label": "office_dog_bed", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -55, "1F_Hallway": -56, "living_sw": -80, "staircase_mid": -80},
+     "features": {}},
+    {"zone_label": "office_dog_bed", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -52, "1F_Hallway": -53, "living_sw": -78, "staircase_mid": -77},
+     "features": {}},
+    {"zone_label": "office_dog_bed", "room": "office", "floor": 1,
+     "rssi_vector": {"1F_Office": -54, "1F_Hallway": -55, "living_sw": -81, "staircase_mid": -79},
+     "features": {}},
+    # hallway — single zone (zone == room)
+    {"zone_label": "hallway", "room": "hallway", "floor": 1,
      "rssi_vector": {"1F_Office": -62, "1F_Hallway": -44, "living_sw": -78, "staircase_mid": -70},
      "features": {}},
-    {"location_label": "hallway", "floor": 1,
+    {"zone_label": "hallway", "room": "hallway", "floor": 1,
      "rssi_vector": {"1F_Office": -64, "1F_Hallway": -46, "living_sw": -79, "staircase_mid": -72},
      "features": {}},
-    {"location_label": "hallway", "floor": 1,
+    {"zone_label": "hallway", "room": "hallway", "floor": 1,
      "rssi_vector": {"1F_Office": -60, "1F_Hallway": -43, "living_sw": -77, "staircase_mid": -71},
      "features": {}},
-    {"location_label": "hallway", "floor": 1,
+    {"zone_label": "hallway", "room": "hallway", "floor": 1,
      "rssi_vector": {"1F_Office": -63, "1F_Hallway": -45, "living_sw": -80, "staircase_mid": -73},
      "features": {}},
-    # Floor 2 — kitchen (close to kitchen_ne anchor)
-    {"location_label": "kitchen", "floor": 2,
+    # kitchen — single zone
+    {"zone_label": "kitchen", "room": "kitchen", "floor": 2,
      "rssi_vector": {"kitchen_ne": -42, "living_center": -58, "living_sw": -65, "staircase_mid": -60, "1F_Office": -85},
      "features": {}},
-    {"location_label": "kitchen", "floor": 2,
+    {"zone_label": "kitchen", "room": "kitchen", "floor": 2,
      "rssi_vector": {"kitchen_ne": -44, "living_center": -60, "living_sw": -67, "staircase_mid": -62, "1F_Office": -87},
      "features": {}},
-    {"location_label": "kitchen", "floor": 2,
+    {"zone_label": "kitchen", "room": "kitchen", "floor": 2,
      "rssi_vector": {"kitchen_ne": -41, "living_center": -57, "living_sw": -64, "staircase_mid": -59, "1F_Office": -84},
      "features": {}},
-    {"location_label": "kitchen", "floor": 2,
+    {"zone_label": "kitchen", "room": "kitchen", "floor": 2,
      "rssi_vector": {"kitchen_ne": -43, "living_center": -59, "living_sw": -66, "staircase_mid": -61, "1F_Office": -86},
      "features": {}},
-    # Floor 2 — living_room (close to living_sw anchor)
-    {"location_label": "living_room", "floor": 2,
+    # living_room — single zone
+    {"zone_label": "living_room", "room": "living_room", "floor": 2,
      "rssi_vector": {"living_sw": -40, "living_center": -50, "kitchen_ne": -62, "staircase_mid": -58, "1F_Office": -83},
      "features": {}},
-    {"location_label": "living_room", "floor": 2,
+    {"zone_label": "living_room", "room": "living_room", "floor": 2,
      "rssi_vector": {"living_sw": -42, "living_center": -52, "kitchen_ne": -64, "staircase_mid": -60, "1F_Office": -85},
      "features": {}},
-    {"location_label": "living_room", "floor": 2,
+    {"zone_label": "living_room", "room": "living_room", "floor": 2,
      "rssi_vector": {"living_sw": -39, "living_center": -49, "kitchen_ne": -61, "staircase_mid": -57, "1F_Office": -82},
      "features": {}},
-    {"location_label": "living_room", "floor": 2,
+    {"zone_label": "living_room", "room": "living_room", "floor": 2,
      "rssi_vector": {"living_sw": -41, "living_center": -51, "kitchen_ne": -63, "staircase_mid": -59, "1F_Office": -84},
      "features": {}},
-    # Floor 3 — master_bed (close to 3F_master_bed anchor)
-    {"location_label": "master_bed", "floor": 3,
+    # master_bed — single zone
+    {"zone_label": "master_bed", "room": "master_bed", "floor": 3,
      "rssi_vector": {"3F_master_bed": -43, "3F_hallway": -58, "staircase_mid": -80, "1F_Office": -90},
      "features": {}},
-    {"location_label": "master_bed", "floor": 3,
+    {"zone_label": "master_bed", "room": "master_bed", "floor": 3,
      "rssi_vector": {"3F_master_bed": -45, "3F_hallway": -60, "staircase_mid": -82, "1F_Office": -92},
      "features": {}},
-    {"location_label": "master_bed", "floor": 3,
+    {"zone_label": "master_bed", "room": "master_bed", "floor": 3,
      "rssi_vector": {"3F_master_bed": -44, "3F_hallway": -59, "staircase_mid": -81, "1F_Office": -91},
      "features": {}},
-    {"location_label": "master_bed", "floor": 3,
+    {"zone_label": "master_bed", "room": "master_bed", "floor": 3,
      "rssi_vector": {"3F_master_bed": -46, "3F_hallway": -61, "staircase_mid": -83, "1F_Office": -93},
      "features": {}},
 ]
@@ -107,13 +121,13 @@ SYNTHETIC_SAMPLES = [
 @pytest.fixture
 def classifier():
     """Untrained classifier with standard anchor IDs."""
-    return RoomClassifier(anchor_ids=ANCHOR_IDS)
+    return ZoneClassifier(anchor_ids=ANCHOR_IDS)
 
 
 @pytest.fixture
 def trained_classifier():
     """Classifier trained on synthetic data."""
-    clf = RoomClassifier(anchor_ids=ANCHOR_IDS)
+    clf = ZoneClassifier(anchor_ids=ANCHOR_IDS)
     clf.train(SYNTHETIC_SAMPLES, augment_factor=3, cv_folds=3)
     return clf
 
@@ -140,6 +154,7 @@ class TestInit:
         r = repr(classifier)
         assert "untrained" in r
         assert f"anchors={len(ANCHOR_IDS)}" in r
+        assert "zones=0" in r
 
     def test_not_trained(self, classifier):
         assert not classifier.is_trained
@@ -216,7 +231,7 @@ class TestAugmentation:
         """Augmentation produces (1 + factor) × N samples."""
         X = np.random.randn(10, 20)
         y = np.array(["a"] * 5 + ["b"] * 5)
-        X_aug, y_aug = RoomClassifier._augment(X, y, anchor_count=8, factor=3)
+        X_aug, y_aug = ZoneClassifier._augment(X, y, anchor_count=8, factor=3)
         assert X_aug.shape[0] == 10 * (1 + 3)
         assert y_aug.shape[0] == 10 * (1 + 3)
 
@@ -224,7 +239,7 @@ class TestAugmentation:
         """First N rows of augmented data are the originals."""
         X = np.random.randn(5, 10)
         y = np.array(["a", "b", "c", "a", "b"])
-        X_aug, y_aug = RoomClassifier._augment(X, y, anchor_count=3, factor=2)
+        X_aug, y_aug = ZoneClassifier._augment(X, y, anchor_count=3, factor=2)
         np.testing.assert_array_equal(X_aug[:5], X)
         np.testing.assert_array_equal(y_aug[:5], y)
 
@@ -232,7 +247,7 @@ class TestAugmentation:
         """Sentinel values should not be altered by RSSI noise."""
         X = np.full((4, 6), MISSING_RSSI_SENTINEL)
         y = np.array(["a", "a", "b", "b"])
-        X_aug, _ = RoomClassifier._augment(
+        X_aug, _ = ZoneClassifier._augment(
             X, y, anchor_count=6, factor=2, rssi_noise_std=5.0, dropout_prob=0.0
         )
         # All augmented RSSI columns should still be sentinel (noise × 0 mask)
@@ -242,8 +257,8 @@ class TestAugmentation:
         """Same random state produces identical augmentation."""
         X = np.random.randn(10, 15)
         y = np.array(["a"] * 5 + ["b"] * 5)
-        X1, y1 = RoomClassifier._augment(X, y, 5, factor=3, rng=np.random.default_rng(99))
-        X2, y2 = RoomClassifier._augment(X, y, 5, factor=3, rng=np.random.default_rng(99))
+        X1, y1 = ZoneClassifier._augment(X, y, 5, factor=3, rng=np.random.default_rng(99))
+        X2, y2 = ZoneClassifier._augment(X, y, 5, factor=3, rng=np.random.default_rng(99))
         np.testing.assert_array_equal(X1, X2)
         np.testing.assert_array_equal(y1, y2)
 
@@ -274,12 +289,19 @@ class TestTraining:
         assert trained_classifier.is_trained
         assert len(trained_classifier.classes) > 0
 
-    def test_classes_are_floor_qualified(self, trained_classifier):
-        """All class labels follow the NF_room pattern."""
+    def test_zone_to_room_populated(self, trained_classifier):
+        """Training populates the zone_to_room mapping."""
+        ztm = trained_classifier.zone_to_room
+        assert len(ztm) > 0
+        # Every class label should be in the mapping
         for cls in trained_classifier.classes:
-            parts = cls.split("_", 1)
-            assert len(parts) == 2, f"Bad class label format: {cls}"
-            assert parts[0] in ("1F", "2F", "3F"), f"Bad floor prefix: {parts[0]}"
+            assert cls in ztm
+        # Sub-zones map to their parent room
+        assert ztm["office_desk"] == "office"
+        assert ztm["office_dog_bed"] == "office"
+        # Degenerate zones map to themselves
+        assert ztm["kitchen"] == "kitchen"
+        assert ztm["hallway"] == "hallway"
 
     def test_feature_importances_populated(self, trained_classifier):
         imps = trained_classifier.feature_importances
@@ -314,7 +336,7 @@ class TestPrediction:
         assert abs(total - 1.0) < 0.01
 
     def test_predict_office_signal(self, trained_classifier):
-        """Strong 1F_Office signal should predict 1F room."""
+        """Strong 1F_Office signal should predict an office sub-zone."""
         rssi = {
             "1F_Office": -44,
             "1F_Hallway": -62,
@@ -322,10 +344,10 @@ class TestPrediction:
             "staircase_mid": -84,
         }
         label, conf, _ = trained_classifier.predict({}, smoothed_rssi=rssi)
-        assert label.startswith("1F_")
+        assert label in ("office_desk", "office_dog_bed")
 
     def test_predict_kitchen_signal(self, trained_classifier):
-        """Strong kitchen_ne signal should predict 2F_kitchen."""
+        """Strong kitchen_ne signal should predict kitchen."""
         rssi = {
             "kitchen_ne": -41,
             "living_center": -57,
@@ -334,10 +356,10 @@ class TestPrediction:
             "1F_Office": -84,
         }
         label, conf, _ = trained_classifier.predict({}, smoothed_rssi=rssi)
-        assert label == "2F_kitchen"
+        assert label == "kitchen"
 
     def test_predict_master_bed_signal(self, trained_classifier):
-        """Strong 3F_master_bed signal should predict 3F_master_bed."""
+        """Strong 3F_master_bed signal should predict master_bed."""
         rssi = {
             "3F_master_bed": -43,
             "3F_hallway": -58,
@@ -345,7 +367,7 @@ class TestPrediction:
             "1F_Office": -90,
         }
         label, conf, _ = trained_classifier.predict({}, smoothed_rssi=rssi)
-        assert label == "3F_master_bed"
+        assert label == "master_bed"
 
     def test_predict_with_no_model_raises(self, classifier):
         with pytest.raises(RuntimeError, match="No model loaded"):
@@ -356,6 +378,51 @@ class TestPrediction:
         label, conf, probs = trained_classifier.predict({}, smoothed_rssi={})
         assert isinstance(label, str)
         assert 0.0 <= conf <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical prediction (predict_for_room)
+# ---------------------------------------------------------------------------
+
+
+class TestPredictForRoom:
+    def test_scopes_to_room(self, trained_classifier):
+        """predict_for_room() returns only zones within the given room."""
+        rssi = {"1F_Office": -45, "1F_Hallway": -60}
+        label, conf, probs = trained_classifier.predict_for_room(
+            {}, smoothed_rssi=rssi, room="office"
+        )
+        assert label in ("office_desk", "office_dog_bed")
+        for z in probs:
+            assert trained_classifier.zone_to_room[z] == "office"
+
+    def test_probabilities_sum_to_one(self, trained_classifier):
+        """Scoped probabilities sum to ~1.0 after renormalisation."""
+        rssi = {"1F_Office": -45, "1F_Hallway": -60}
+        _, _, probs = trained_classifier.predict_for_room(
+            {}, smoothed_rssi=rssi, room="office"
+        )
+        assert abs(sum(probs.values()) - 1.0) < 0.01
+
+    def test_unknown_room_returns_none(self, trained_classifier):
+        """Room with no zones in training data returns (None, 0, {})."""
+        rssi = {"1F_Office": -50}
+        label, conf, probs = trained_classifier.predict_for_room(
+            {}, smoothed_rssi=rssi, room="basement"
+        )
+        assert label is None
+        assert conf == 0.0
+        assert probs == {}
+
+    def test_single_zone_room_returns_zone(self, trained_classifier):
+        """Room with one zone returns that zone with high confidence."""
+        rssi = {"kitchen_ne": -41, "living_center": -57, "living_sw": -64}
+        label, conf, probs = trained_classifier.predict_for_room(
+            {}, smoothed_rssi=rssi, room="kitchen"
+        )
+        assert label == "kitchen"
+        assert conf > 0.0
+        assert "kitchen" in probs
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +442,7 @@ class TestPersistence:
             assert os.path.exists(path)
 
             # Load into fresh classifier
-            loaded = RoomClassifier(anchor_ids=ANCHOR_IDS)
+            loaded = ZoneClassifier(anchor_ids=ANCHOR_IDS)
             loaded.load(path)
 
             label2, conf2, probs2 = loaded.predict({}, smoothed_rssi=rssi)
@@ -389,10 +456,19 @@ class TestPersistence:
             path = os.path.join(tmpdir, "model.joblib")
             trained_classifier.save(path)
 
-            loaded = RoomClassifier.from_file(path)
+            loaded = ZoneClassifier.from_file(path)
             assert loaded.is_trained
             assert loaded.classes == trained_classifier.classes
             assert loaded.anchor_ids == trained_classifier.anchor_ids
+
+    def test_zone_to_room_survives_roundtrip(self, trained_classifier):
+        """zone_to_room mapping persists through save/load."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "model.joblib")
+            trained_classifier.save(path)
+
+            loaded = ZoneClassifier.from_file(path)
+            assert loaded.zone_to_room == trained_classifier.zone_to_room
 
     def test_save_before_training_raises(self, classifier):
         with pytest.raises(RuntimeError, match="No model to save"):
@@ -404,7 +480,7 @@ class TestPersistence:
             path = os.path.join(tmpdir, "model.joblib")
             trained_classifier.save(path)
 
-            loaded = RoomClassifier.from_file(path)
+            loaded = ZoneClassifier.from_file(path)
             assert loaded.feature_names == trained_classifier.feature_names
             assert loaded.anchor_ids == trained_classifier.anchor_ids
             assert loaded.classes == trained_classifier.classes
@@ -438,7 +514,35 @@ class TestEdgeCases:
     def test_repr_trained(self, trained_classifier):
         r = repr(trained_classifier)
         assert "trained" in r
-        assert "classes=" in r
+        assert "zones=" in r
+        assert "rooms=" in r
+
+    def test_backwards_compat_alias(self):
+        """RoomClassifier is an alias for ZoneClassifier."""
+        assert RoomClassifier is ZoneClassifier
+
+    def test_location_label_fallback(self):
+        """Training falls back to location_label when zone_label is absent."""
+        legacy_samples = [
+            {"location_label": "office", "floor": 1,
+             "rssi_vector": {"1F_Office": -45, "1F_Hallway": -60},
+             "features": {}},
+            {"location_label": "office", "floor": 1,
+             "rssi_vector": {"1F_Office": -47, "1F_Hallway": -62},
+             "features": {}},
+            {"location_label": "hallway", "floor": 1,
+             "rssi_vector": {"1F_Office": -64, "1F_Hallway": -44},
+             "features": {}},
+            {"location_label": "hallway", "floor": 1,
+             "rssi_vector": {"1F_Office": -62, "1F_Hallway": -43},
+             "features": {}},
+        ]
+        clf = ZoneClassifier(anchor_ids=ANCHOR_IDS)
+        clf.train(legacy_samples, augment_factor=2, cv_folds=2)
+        assert "office" in clf.classes
+        assert "hallway" in clf.classes
+        # zone == room when no explicit room field
+        assert clf.zone_to_room["office"] == "office"
 
 
 # ---------------------------------------------------------------------------
