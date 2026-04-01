@@ -158,7 +158,7 @@
   - Hardware: None (data from #19)
   - Dependencies: #22, #19
 
-- [x] **35. Client-side particle interpolation** — Add a `clientside_callback` with a fast `dcc.Interval` (~33ms) that linearly interpolates particle positions between inference snapshots, decoupling visual framerate from the 250ms inference tick. Store prev/current snapshots in `dcc.Store`, lerp in JS.
+- [ ] **35. Client-side particle interpolation** — Add a `clientside_callback` with a fast `dcc.Interval` (~33ms) that linearly interpolates particle positions between inference snapshots, decoupling visual framerate from the 250ms inference tick. Store prev/current snapshots in `dcc.Store`, lerp in JS.
   - Hardware: None
   - Dependencies: —
 
@@ -168,4 +168,11 @@
 
 - [ ] **36. RPi 5 performance benchmarking** — Profile full inference pipeline on Raspberry Pi 5 (Cortex-A76 @ 2.4GHz) and Mac (Apple Silicon). Measure `step()` latency, wall-crossing overhead, and max sustainable MQTT throughput. If step time exceeds 125ms budget (8 msg/sec), vectorize `count_wall_crossings` with numpy or precompute wall-crossing lookup table.
   - Hardware: **Raspberry Pi 5**
-  - Dependencies: #28
+
+- [ ] **37. Body-occlusion detector** — Detect when the pet's body is occluding the beacon (e.g. lying on collar). Occlusion analysis (2026-03-26) showed ~12 dB same-floor attenuation with anchor visibility dropping from 5→3. Three-layer defense: (1) **Detection** — flag occlusion when `n_reporting` drops AND same-floor anchors uniformly attenuate while cross-floor anchors are stable. Use `n_reporting`, per-anchor RSSI delta from baseline, and variance inversion (lower σ under occlusion) as indicators. (2) **Temporal smoothing** — already implemented via `ZoneSmoother` with activity-adaptive EMA. (3) **Training augmentation** — include occluded RSSI samples in `ZoneClassifier` training data so the RF learns to be robust to body attenuation patterns.
+  - Hardware: None (captured calibration data in `scratch/occlusion_analysis_1F_Office_20260326.json`)
+  - Dependencies: #21
+
+- [ ] **38. Zone smoother (activity-adaptive EMA)** — Wire `ZoneSmoother` (`services/inference/models/zone_smoother.py`) into the inference pipeline after the `ZoneClassifier` prediction step. Applies an exponential moving average over sub-zone probability distributions to prevent zone-label snapping during body-occlusion or brief RSSI fluctuations. Alpha adapts to activity state: moving=0.3, stationary=0.05, sleeping=0.01. Resets on room change. Module and tests (`tests/test_zone_smoother.py`) are already written — just needs re-integration into `main.py:run_inference()`.
+  - Hardware: None
+  - Dependencies: #21
