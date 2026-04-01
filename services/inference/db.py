@@ -63,6 +63,8 @@ fingerprint_samples = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("timestamp", TIMESTAMP(timezone=True)),
     Column("location_label", String(50), nullable=False),
+    Column("zone_label", String(50)),
+    Column("room", String(50)),
     Column("floor", Integer, nullable=False),
     Column("grid_x", Float, nullable=False),
     Column("grid_y", Float, nullable=False),
@@ -213,6 +215,8 @@ class Database:
         duration_seconds: Optional[float] = None,
         n_readings: Optional[int] = None,
         notes: Optional[str] = None,
+        zone_label: Optional[str] = None,
+        room: Optional[str] = None,
     ) -> bool:
         """Insert a site-survey fingerprint sample.  Returns True on success."""
         if self._engine is None:
@@ -224,6 +228,8 @@ class Database:
                     fingerprint_samples.insert().values(
                         timestamp=datetime.now(timezone.utc),
                         location_label=location_label,
+                        zone_label=zone_label,
+                        room=room,
                         floor=floor,
                         grid_x=grid_x,
                         grid_y=grid_y,

@@ -21,7 +21,7 @@ Prediction
 Given a feature dict (from ``FeatureEngine.update()``), assemble the
 feature vector in canonical order, impute missing anchors with sentinel
 values.  Use ``predict_for_room()`` for hierarchical fusion (filters and
-renormalises probabilities to zones within the particle-determined room).
+renormalizes probabilities to zones within the particle-determined room).
 
 Persistence
 -----------
@@ -434,7 +434,7 @@ class ZoneClassifier:
         """Predict sub-zone scoped to a specific room.
 
         Filters RF probabilities to only zones belonging to the given
-        room (via ``zone_to_room`` mapping), then renormalises.  This
+        room (via ``zone_to_room`` mapping), then renormalizes.  This
         is the primary prediction method for hierarchical fusion where
         the particle filter determines the room.
 
@@ -453,9 +453,9 @@ class ZoneClassifier:
         label : str | None
             Best zone within the room, or ``None`` if no zones match.
         confidence : float
-            Renormalised probability of the best zone (0–1).
+            Renormalized probability of the best zone (0–1).
         probabilities : dict
-            ``{zone: probability}`` for zones in this room (renormalised).
+            ``{zone: probability}`` for zones in this room (renormalized).
         """
         _, _, all_probs = self.predict(features, smoothed_rssi)
 

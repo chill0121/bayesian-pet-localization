@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS fingerprint_samples (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ DEFAULT NOW(),
     location_label VARCHAR(50) NOT NULL,       -- room or zone name (e.g., 'kitchen')
+    zone_label VARCHAR(50),                    -- sub-zone name (e.g., 'office_dog_bed')
+    room VARCHAR(50),                          -- parent room name (e.g., 'office')
     floor INTEGER NOT NULL REFERENCES floors(floor_number),
     grid_x FLOAT NOT NULL,                     -- survey grid position (feet)
     grid_y FLOAT NOT NULL,

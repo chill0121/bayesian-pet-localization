@@ -60,10 +60,11 @@ LAYOUT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "config", "floorplan", "layout.json"
 )
 
-DEFAULT_RESOLUTION = 2.0    # feet between grid points
-DEFAULT_DWELL = 45          # seconds per point
+DEFAULT_RESOLUTION = 3.0    # feet between grid points
+DEFAULT_DWELL = 30          # seconds per point
 DEFAULT_MIN_ANCHORS = 3     # minimum anchors required for a valid sample
 HIGH_VARIANCE_THRESHOLD = 8.0  # dBm — flag points above this
+POI_DWELL_OCCLUDED = 15     # seconds per POI during occluded pass
 
 # Progress file for resume capability
 PROGRESS_DIR = os.path.join(os.path.dirname(__file__), "..", "scratch")
@@ -127,17 +128,29 @@ def build_room_gates(layout_data: dict) -> dict:
 def label_room(x: float, y: float, floor: int, room_polygons: dict,
                room_gates: dict) -> str:
     """Determine room/zone label for a point using polygon + gates."""
+    _room, zone = label_room_and_zone(x, y, floor, room_polygons, room_gates)
+    return zone
+
+
+def label_room_and_zone(x: float, y: float, floor: int, room_polygons: dict,
+                        room_gates: dict) -> tuple[str, str]:
+    """Return (parent_room, zone_label) for a point.
+
+    If the point is inside a room with gate-defined sub-zones, returns
+    the polygon room name as parent and the gate-resolved name as zone.
+    Otherwise parent == zone (degenerate case, no sub-zones).
+    """
     for name, poly in room_polygons.get(floor, []):
         if _point_in_polygon(x, y, poly):
             gates = room_gates.get(floor, {}).get(name, [])
             for gate in gates:
                 val = y if gate["axis"] == "y" else x
                 if val >= gate["coord"]:
-                    return gate["above"]
+                    return name, gate["above"]
                 else:
-                    return gate["below"]
-            return name
-    return "unknown"
+                    return name, gate["below"]
+            return name, name
+    return "unknown", "unknown"
 
 
 def generate_grid_points(
@@ -150,8 +163,9 @@ def generate_grid_points(
 ) -> list[dict]:
     """Generate survey grid points for a single floor.
 
-    Returns a list of dicts: {x, y, floor, room, point_type} sorted into
-    a serpentine walking path.
+    Returns a list of dicts: {x, y, floor, room, zone, point_type} sorted into
+    a serpentine walking path.  ``room`` is the parent polygon name and
+    ``zone`` is the gate-resolved sub-zone (equals ``room`` when no gates).
     """
     points = []
     seen = set()  # (round(x,2), round(y,2)) to deduplicate
@@ -187,12 +201,14 @@ def generate_grid_points(
             if grid.is_walkable(x, y):
                 key = (round(x, 2), round(y, 2))
                 if key not in seen:
-                    room = label_room(x, y, floor, room_polygons, room_gates)
+                    parent_room, zone = label_room_and_zone(
+                        x, y, floor, room_polygons, room_gates)
                     col_points.append({
                         "x": round(x, 2),
                         "y": round(y, 2),
                         "floor": floor,
-                        "room": room,
+                        "room": parent_room,
+                        "zone": zone,
                         "type": "grid",
                     })
                     seen.add(key)
@@ -214,8 +230,8 @@ def generate_grid_points(
             if grid.is_walkable(cx, cy):
                 key = (round(cx, 2), round(cy, 2))
                 if key not in seen:
-                    room_name = label_room(cx, cy, floor, room_polygons,
-                                           room_gates)
+                    parent_room, zone = label_room_and_zone(
+                        cx, cy, floor, room_polygons, room_gates)
                     # Classify as "stairs" if either end is a staircase
                     is_stair = (
                         dw.get("to") == "staircase"
@@ -225,7 +241,8 @@ def generate_grid_points(
                         "x": round(cx, 2),
                         "y": round(cy, 2),
                         "floor": floor,
-                        "room": room_name,
+                        "room": parent_room,
+                        "zone": zone,
                         "type": "stairs" if is_stair else "doorway",
                     })
                     seen.add(key)
@@ -235,13 +252,14 @@ def generate_grid_points(
             if grid.is_walkable(cx, cy):
                 key = (round(cx, 2), round(cy, 2))
                 if key not in seen:
-                    room_name = label_room(cx, cy, floor, room_polygons,
-                                           room_gates)
+                    parent_room, zone = label_room_and_zone(
+                        cx, cy, floor, room_polygons, room_gates)
                     points.append({
                         "x": round(cx, 2),
                         "y": round(cy, 2),
                         "floor": floor,
-                        "room": room_name,
+                        "room": parent_room,
+                        "zone": zone,
                         "type": "stairs",
                     })
                     seen.add(key)
@@ -252,13 +270,14 @@ def generate_grid_points(
         if grid.is_walkable(cx, cy):
             key = (round(cx, 2), round(cy, 2))
             if key not in seen:
-                room_name = label_room(cx, cy, floor, room_polygons,
-                                       room_gates)
+                parent_room, zone = label_room_and_zone(
+                    cx, cy, floor, room_polygons, room_gates)
                 points.append({
                     "x": round(cx, 2),
                     "y": round(cy, 2),
                     "floor": floor,
-                    "room": room_name,
+                    "room": parent_room,
+                    "zone": zone,
                     "type": "stairs",
                 })
                 seen.add(key)
@@ -270,13 +289,14 @@ def generate_grid_points(
             if grid.is_walkable(px, py):
                 key = (round(px, 2), round(py, 2))
                 if key not in seen:
-                    room_name = label_room(px, py, floor, room_polygons,
-                                           room_gates)
+                    parent_room, zone = label_room_and_zone(
+                        px, py, floor, room_polygons, room_gates)
                     points.append({
                         "x": round(px, 2),
                         "y": round(py, 2),
                         "floor": floor,
-                        "room": room_name,
+                        "room": parent_room,
+                        "zone": zone,
                         "type": "poi",
                     })
                     seen.add(key)
@@ -498,9 +518,11 @@ def getch_nonblocking(timeout: float = 0.0) -> str:
 
 def dry_run_display(points: list[dict], floor: int, resolution: float):
     """Display grid points summary and optionally plot."""
+    zone_counts = defaultdict(int)
     room_counts = defaultdict(int)
     type_counts = defaultdict(int)
     for p in points:
+        zone_counts[p.get("zone", p["room"])] += 1
         room_counts[p["room"]] += 1
         type_counts[p["type"]] += 1
 
@@ -509,13 +531,28 @@ def dry_run_display(points: list[dict], floor: int, resolution: float):
     print(f"{'=' * 60}")
     print(f"  Total points: {len(points)}")
     print()
-    print("  Points by room:")
-    for room, count in sorted(room_counts.items()):
-        print(f"    {room:25s}  {count:3d}")
+    print("  Points by zone (parent room):")
+    for zone, count in sorted(zone_counts.items()):
+        # Find parent room for this zone
+        parent = next(
+            (p["room"] for p in points if p.get("zone") == zone),
+            zone,
+        )
+        suffix = f"  ← {parent}" if parent != zone else ""
+        print(f"    {zone:25s}  {count:3d}{suffix}")
     print()
     print("  Points by type:")
     for ptype, count in sorted(type_counts.items()):
         print(f"    {ptype:25s}  {count:3d}")
+    print()
+
+    # Occluded pass info
+    poi_count = type_counts.get("poi", 0)
+    if poi_count:
+        print(f"  Occluded POI pass: {poi_count} points × "
+              f"{POI_DWELL_OCCLUDED}s dwell")
+    else:
+        print("  Occluded POI pass: no POI points defined")
     print()
 
     # Try to generate a matplotlib plot
@@ -560,7 +597,7 @@ def dry_run_display(points: list[dict], floor: int, resolution: float):
                             [p[1] for p in obs_closed],
                             alpha=0.4, color="#999999")
 
-        # Plot grid points
+        # Plot grid points with coordinate labels
         colors = {"grid": "#2196F3", "doorway": "#FF9800",
                   "stairs": "#4CAF50", "poi": "#E91E63"}
         for ptype, color in colors.items():
@@ -569,6 +606,15 @@ def dry_run_display(points: list[dict], floor: int, resolution: float):
                 ax.scatter([p["x"] for p in pts], [p["y"] for p in pts],
                            c=color, s=25, label=f"{ptype} ({len(pts)})",
                            zorder=5, edgecolors="white", linewidths=0.5)
+
+        # Number each point and show coordinates
+        for i, p in enumerate(points, 1):
+            ax.annotate(
+                f"{i}\n({p['x']:.1f},{p['y']:.1f})",
+                (p["x"], p["y"]),
+                textcoords="offset points", xytext=(4, 4),
+                fontsize=4.5, color="#333333", zorder=6,
+            )
 
         ax.legend(loc="upper right", fontsize=8)
         ax.grid(True, alpha=0.2)
@@ -593,8 +639,9 @@ def dry_run_display(points: list[dict], floor: int, resolution: float):
 def init_csv(path: str, anchors: list[str]) -> csv.DictWriter:
     """Create CSV file and return writer."""
     fieldnames = [
-        "timestamp", "floor", "grid_x", "grid_y", "room", "point_type",
-        "anchor_count", "n_readings", "duration_seconds", "notes",
+        "timestamp", "floor", "grid_x", "grid_y", "room", "zone",
+        "point_type", "anchor_count", "n_readings", "duration_seconds",
+        "notes",
     ] + [f"rssi_{a}" for a in sorted(anchors)] + [
         f"std_{a}" for a in sorted(anchors)
     ]
@@ -619,6 +666,8 @@ def run_survey(
     resume: bool = False,
     csv_writer: csv.DictWriter | None = None,
     known_anchors: list[str] | None = None,
+    zone_override: str | None = None,
+    skip_occluded: bool = False,
 ):
     """Main interactive survey loop.
 
@@ -659,14 +708,24 @@ def run_survey(
     last_completed_idx = None
     point_num = 0
 
+    # Apply zone override if specified
+    if zone_override:
+        for p in points:
+            p["zone"] = zone_override
+        print(f"  Zone override active: all points labeled as '{zone_override}'")
+        print()
+
     for seq, idx in enumerate(remaining):
         point = points[idx]
         point_num = seq + 1 + len(completed)
 
         # Show next point prompt
+        zone_info = point['zone']
+        if point['room'] != point['zone']:
+            zone_info = f"{point['zone']} (in {point['room']})"
         print(f"{'─' * 60}")
         print(f"  Point {point_num}/{total}  "
-              f"({point['x']}, {point['y']})  [{point['room']}]  "
+              f"({point['x']:.1f}, {point['y']:.1f})  [{zone_info}]  "
               f"({point['type']})")
         print(f"  Place beacon on stand → ", end="")
 
@@ -746,6 +805,61 @@ def run_survey(
     print(f"  ✓ Floor {floor} survey COMPLETE — {len(completed)}/{total} points")
     print(f"{'═' * 60}")
 
+    # --- Occluded POI pass ---
+    poi_points = [(i, p) for i, p in enumerate(points) if p["type"] == "poi"]
+    if poi_points and not skip_occluded:
+        print(f"\n{'=' * 60}")
+        print(f"  OCCLUDED POI PASS — Floor {floor}")
+        print(f"  {len(poi_points)} POI points | {POI_DWELL_OCCLUDED}s dwell each")
+        print(f"{'=' * 60}")
+        print()
+        print("  Place the beacon face-down (or under a light weight)")
+        print("  to simulate body occlusion at each POI.")
+        print()
+        print("  ENTER=start pass | S=skip entire pass: ", end="")
+        sys.stdout.flush()
+        try:
+            start_input = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            start_input = "s"
+
+        if start_input != "s":
+            for seq, (idx_poi, poi) in enumerate(poi_points, 1):
+                zone_info = poi["zone"]
+                if poi["room"] != poi["zone"]:
+                    zone_info = f"{poi['zone']} (in {poi['room']})"
+                print(f"{'─' * 60}")
+                print(f"  Occluded {seq}/{len(poi_points)}  "
+                      f"({poi['x']}, {poi['y']})  [{zone_info}]")
+                print(f"  Place beacon face-down → ", end="")
+                print("ENTER=start | s=skip | q=quit: ", end="")
+                sys.stdout.flush()
+                try:
+                    user_input = input().strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    user_input = "q"
+
+                if user_input == "s":
+                    print(f"  → Skipped occluded {seq}")
+                    continue
+                if user_input == "q":
+                    print(f"  → Occluded pass stopped early.")
+                    break
+
+                occ_note = "occluded"
+                if note_buffer:
+                    occ_note = f"occluded; {note_buffer}"
+                _collect_point(
+                    collector, db_client, poi, idx_poi, floor,
+                    POI_DWELL_OCCLUDED, min_anchors, survey_id,
+                    occ_note, csv_writer, known_anchors,
+                    completed, total, point_num,
+                )
+
+            print(f"\n  ✓ Occluded POI pass complete.")
+        else:
+            print(f"  → Skipped occluded pass.")
+
     # QC summary
     _print_qc_summary(points, completed)
 
@@ -812,8 +926,10 @@ def _collect_point(
     for w in result["warnings"]:
         print(w)
 
-    # Build location label (floor-qualified for classifier)
-    location_label = f"{floor}F_{point['room']}"
+    # Build labels for classifier
+    zone_label = point.get("zone", point["room"])
+    parent_room = point["room"]
+    location_label = zone_label  # zone is the primary label (no floor prefix)
 
     # Build notes string
     notes_parts = [f"survey_id={survey_id}", f"type={point['type']}"]
@@ -825,6 +941,8 @@ def _collect_point(
     if db_client is not None and db_client.connected:
         success = db_client.write_fingerprint(
             location_label=location_label,
+            zone_label=zone_label,
+            room=parent_room,
             floor=floor,
             grid_x=point["x"],
             grid_y=point["y"],
@@ -850,7 +968,8 @@ def _collect_point(
             "floor": floor,
             "grid_x": point["x"],
             "grid_y": point["y"],
-            "room": point["room"],
+            "room": parent_room,
+            "zone": zone_label,
             "point_type": point["type"],
             "anchor_count": result["anchor_count"],
             "n_readings": result["n_readings"],
@@ -870,20 +989,25 @@ def _collect_point(
 
 def _print_qc_summary(points: list[dict], completed: set[int]):
     """Print a quality-control summary of the completed survey."""
-    room_counts = defaultdict(int)
-    room_total = defaultdict(int)
+    zone_counts = defaultdict(int)
+    zone_total = defaultdict(int)
+    zone_parent = {}
     for i, p in enumerate(points):
-        room_total[p["room"]] += 1
+        zone = p.get("zone", p["room"])
+        zone_total[zone] += 1
+        zone_parent[zone] = p["room"]
         if i in completed:
-            room_counts[p["room"]] += 1
+            zone_counts[zone] += 1
 
-    print("\n  QC Summary — Points per room:")
-    all_rooms = sorted(set(list(room_counts.keys()) + list(room_total.keys())))
-    for room in all_rooms:
-        done = room_counts.get(room, 0)
-        total = room_total.get(room, 0)
+    print("\n  QC Summary — Points per zone:")
+    all_zones = sorted(set(list(zone_counts.keys()) + list(zone_total.keys())))
+    for zone in all_zones:
+        done = zone_counts.get(zone, 0)
+        total = zone_total.get(zone, 0)
         status = "✓" if done >= 3 else "⚠ <3 points"
-        print(f"    {room:25s}  {done:3d}/{total:3d}  {status}")
+        parent = zone_parent.get(zone, "")
+        suffix = f"  (in {parent})" if parent and parent != zone else ""
+        print(f"    {zone:25s}  {done:3d}/{total:3d}  {status}{suffix}")
     print()
 
 
@@ -949,6 +1073,10 @@ Examples:
         help="Show grid points and plot without collecting data",
     )
     parser.add_argument(
+        "--zone-label", type=str, default=None,
+        help="Override auto-detected zone label for all points (e.g., 'office_dog_bed')",
+    )
+    parser.add_argument(
         "--output-csv", type=str, default=None,
         help="Optional CSV output file path",
     )
@@ -976,6 +1104,10 @@ Examples:
     parser.add_argument(
         "--no-db", action="store_true",
         help="Skip database writes (CSV/console only)",
+    )
+    parser.add_argument(
+        "--no-occluded", action="store_true",
+        help="Skip the occluded POI collection pass",
     )
 
     args = parser.parse_args()
@@ -1050,7 +1182,7 @@ Examples:
             anchor_ids = sorted(anchors.keys())
             csv_file = open(args.output_csv, "w", newline="")
             fieldnames = [
-                "timestamp", "floor", "grid_x", "grid_y", "room",
+                "timestamp", "floor", "grid_x", "grid_y", "room", "zone",
                 "point_type", "anchor_count", "n_readings",
                 "duration_seconds", "notes",
             ] + [f"rssi_{a}" for a in anchor_ids] + [
@@ -1072,6 +1204,8 @@ Examples:
                 resume=args.resume,
                 csv_writer=csv_writer,
                 known_anchors=sorted(anchors.keys()),
+                zone_override=args.zone_label,
+                skip_occluded=args.no_occluded,
             )
         except KeyboardInterrupt:
             print(f"\n\n  Survey interrupted (Ctrl+C).")
@@ -1083,16 +1217,23 @@ Examples:
                 csv_file.close()
 
     if args.dry_run:
-        est_time = sum(
-            len(generate_grid_points(
-                layout_data, grids, room_polygons, room_gates,
-                f, args.resolution,
-            ))
-            for f in floors_to_survey
-            if f in grids
-        ) * (args.dwell + 15) / 60
-        print(f"  Estimated total survey time: ~{est_time:.0f} min "
-              f"(dwell + 15s transition)")
+        all_points = []
+        for f in floors_to_survey:
+            if f in grids:
+                all_points.extend(generate_grid_points(
+                    layout_data, grids, room_polygons, room_gates,
+                    f, args.resolution,
+                ))
+        total_pts = len(all_points)
+        poi_pts = sum(1 for p in all_points if p["type"] == "poi")
+        grid_time = total_pts * (args.dwell + 15) / 60
+        occ_time = poi_pts * (POI_DWELL_OCCLUDED + 10) / 60
+        print(f"  Estimated time:")
+        print(f"    Grid pass:     ~{grid_time:.0f} min  "
+              f"({total_pts} pts × {args.dwell + 15}s)")
+        print(f"    Occluded pass: ~{occ_time:.0f} min  "
+              f"({poi_pts} POI × {POI_DWELL_OCCLUDED + 10}s)")
+        print(f"    Total:         ~{grid_time + occ_time:.0f} min")
 
 
 if __name__ == "__main__":
