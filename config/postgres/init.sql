@@ -112,5 +112,5 @@ INSERT INTO anchors (anchor_id, floor, x, y, height_ft) VALUES
     ('2f_kitchen_ne',     2, 17.70, 20.60, 3.71),
     ('3f_master_bed',     3, 10.67, 14.09, 1.14),
     ('3f_hallway',        3,  3.35, 19.84, 1.03),
-    ('3f_wifes_office',   3, 10.38, 19.48, 1.02)
+    ('3f_office',         3, 10.38, 19.48, 1.02)
 ON CONFLICT (anchor_id) DO NOTHING;

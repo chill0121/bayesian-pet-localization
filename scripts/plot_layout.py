@@ -26,14 +26,14 @@ import numpy as np
 ROOM_COLORS = {
     # Floor 1
     'hallway_1f': 'steelblue',
-    'office': '#e67e22',
+    'office_1f': '#e67e22',
     # Floor 2
     'living_kitchen': 'steelblue',
     'powder_room': '#e67e22',
     # Floor 3
     'hallway_3f': 'steelblue',
     'guest_bath': '#27ae60',
-    'wife_office': '#e67e22',
+    'office_3f': '#e67e22',
     'master_bed': '#8e44ad',
     'master_bath': '#cc3333',
     # Shared
@@ -367,7 +367,7 @@ def main():
     floor_configs = [
         (1, "1st Floor", {
             'hallway': ROOM_COLORS['hallway_1f'],
-            'office': ROOM_COLORS['office'],
+            'office': ROOM_COLORS['office_1f'],
             'staircase': ROOM_COLORS['staircase'],
             'garage': ROOM_COLORS['garage'],
         }),
@@ -379,7 +379,7 @@ def main():
         (3, "3rd Floor", {
             'hallway': ROOM_COLORS['hallway_3f'],
             'guest_bath': ROOM_COLORS['guest_bath'],
-            'wife_office': ROOM_COLORS['wife_office'],
+            'office': ROOM_COLORS['office_3f'],
             'master_bed': ROOM_COLORS['master_bed'],
             'master_bath': ROOM_COLORS['master_bath'],
             'staircase': ROOM_COLORS['staircase'],

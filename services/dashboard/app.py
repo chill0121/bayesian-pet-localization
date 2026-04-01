@@ -56,7 +56,6 @@ ROOM_PALETTE = {
     "living_kitchen": "#4a90d9",
     "powder_room": "#e67e22",
     "guest_bath": "#27ae60",
-    "wife_office": "#e67e22",
     "master_bed": "#8e44ad",
     "master_bath": "#cc3333",
 }

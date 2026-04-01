@@ -40,7 +40,7 @@ This project combines IoT sensor networks with probabilistic ML to solve indoor 
 |-------|---------|-----------|
 | 1st | 2 | Office (near dog bed), Hallway (near stairs) |
 | 2nd | 3 | Living SE, Living SW/center, Kitchen NE |
-| 3rd | 3 | Master bedroom, Hallway, Wife's office |
+| 3rd | 3 | Master bedroom, Hallway, 3F office |
 
 ### Infrastructure
 

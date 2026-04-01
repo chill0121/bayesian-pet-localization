@@ -229,9 +229,9 @@ class TestDoorwayConnectivity:
         assert self.grids[2].is_walkable(3.51, 24.32)
 
     def test_hallway_to_rooms_3f(self):
-        """Doorways from 3F hallway to guest bath, wife's office, master bed."""
+        """Doorways from 3F hallway to guest bath, 3F office, master bed."""
         assert self.grids[3].is_walkable(5.51, 24.04)  # guest bath
-        assert self.grids[3].is_walkable(6.89, 21.34)  # wife's office
+        assert self.grids[3].is_walkable(6.89, 21.34)  # 3F office
         assert self.grids[3].is_walkable(6.89, 12.7)   # master bed
 
 
@@ -246,8 +246,8 @@ class TestWallEnforcement:
         cls.layout = _load_layout()
         cls.grids = OccupancyGridSet.from_layout_data(cls.layout, resolution=0.5)
 
-    def test_guest_bath_wife_office_wall_3f(self):
-        """3F guest bath and wife office share a wall with no doorway between them.
+    def test_guest_bath_office_wall_3f(self):
+        """3F guest bath and 3F office share a wall with no doorway between them.
         ray_clear should return False across that boundary."""
         assert not self.grids[3].ray_clear(4.0, 27.0, 12.0, 27.0)
 

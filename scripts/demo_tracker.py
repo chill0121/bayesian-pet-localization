@@ -56,8 +56,8 @@ TRAJECTORY_WAYPOINTS = [
     (3,  5.1, 16.0,  'hallway',         1),   # 3F hallway
     (3, 12.0,  8.0,  'master_bed',     10),   # master bed nap
     (3,  5.1, 16.0,  'hallway',         1),   # back to hallway
-    (3,  5.1, 22.0,  'hallway',         1),   # toward wife office
-    (3, 12.0, 24.0,  'wife_office',     5),   # wife office hang
+    (3,  5.1, 22.0,  'hallway',         1),   # toward 3F office
+    (3, 12.0, 24.0,  'office',           5),   # 3F office hang
 ]
 
 
@@ -136,7 +136,6 @@ ROOM_LABEL_MAP = {
     'office': 'Office',
     'garage': 'Garage',
     'guest_bath': 'Guest Bath',
-    'wife_office': "Wife's Office",
     'master_bed': 'Master Bed',
     'master_bath': 'Master Bath',
 }
@@ -146,10 +145,9 @@ FLOOR_ROOM_COLORS = {
     'staircase': ROOM_COLORS['staircase'],
     'powder_room': ROOM_COLORS['powder_room'],
     'hallway': ROOM_COLORS['hallway_1f'],
-    'office': ROOM_COLORS['office'],
+    'office': ROOM_COLORS['office_1f'],
     'garage': ROOM_COLORS['garage'],
     'guest_bath': ROOM_COLORS['guest_bath'],
-    'wife_office': ROOM_COLORS['wife_office'],
     'master_bed': ROOM_COLORS['master_bed'],
     'master_bath': ROOM_COLORS['master_bath'],
 }
@@ -215,13 +213,13 @@ def draw_mini_floors(fig, gs_mini, layout, active_floor, trajectory, current_idx
     floors_data = {f['floor']: f for f in layout['floors']}
 
     floor_color_maps = {
-        1: {'hallway': ROOM_COLORS['hallway_1f'], 'office': ROOM_COLORS['office'],
+        1: {'hallway': ROOM_COLORS['hallway_1f'], 'office': ROOM_COLORS['office_1f'],
             'staircase': ROOM_COLORS['staircase'], 'garage': ROOM_COLORS['garage']},
         2: {'living_kitchen': ROOM_COLORS['living_kitchen'],
             'staircase': ROOM_COLORS['staircase'],
             'powder_room': ROOM_COLORS['powder_room']},
         3: {'hallway': ROOM_COLORS['hallway_3f'], 'guest_bath': ROOM_COLORS['guest_bath'],
-            'wife_office': ROOM_COLORS['wife_office'], 'master_bed': ROOM_COLORS['master_bed'],
+            'office': ROOM_COLORS['office_3f'], 'master_bed': ROOM_COLORS['master_bed'],
             'master_bath': ROOM_COLORS['master_bath'], 'staircase': ROOM_COLORS['staircase']},
     }
 
@@ -388,13 +386,13 @@ def main():
     ax_main = fig.add_subplot(gs[0, 0])
 
     floor_color_maps = {
-        1: {'hallway': ROOM_COLORS['hallway_1f'], 'office': ROOM_COLORS['office'],
+        1: {'hallway': ROOM_COLORS['hallway_1f'], 'office': ROOM_COLORS['office_1f'],
             'staircase': ROOM_COLORS['staircase'], 'garage': ROOM_COLORS['garage']},
         2: {'living_kitchen': ROOM_COLORS['living_kitchen'],
             'staircase': ROOM_COLORS['staircase'],
             'powder_room': ROOM_COLORS['powder_room']},
         3: {'hallway': ROOM_COLORS['hallway_3f'], 'guest_bath': ROOM_COLORS['guest_bath'],
-            'wife_office': ROOM_COLORS['wife_office'], 'master_bed': ROOM_COLORS['master_bed'],
+            'office': ROOM_COLORS['office_3f'], 'master_bed': ROOM_COLORS['master_bed'],
             'master_bath': ROOM_COLORS['master_bath'], 'staircase': ROOM_COLORS['staircase']},
     }
 

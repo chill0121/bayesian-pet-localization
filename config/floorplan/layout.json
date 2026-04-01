@@ -51,7 +51,7 @@
       "rooms": [
         {
           "name": "hallway",
-          "label": "1st Floor Hallway",
+          "label": "1F Hallway",
           "vertex_prefix": "H",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -156,7 +156,7 @@
         },
         {
           "name": "office",
-          "label": "1st Floor Office",
+          "label": "1F Office",
           "vertex_prefix": "O",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -205,7 +205,7 @@
         },
         {
           "name": "staircase",
-          "label": "Staircase (1F landing)",
+          "label": "Staircase (1F)",
           "vertex_prefix": "S",
           "ceiling_height_ft": 7.95,
           "bounds": {
@@ -231,7 +231,7 @@
         },
         {
           "name": "garage",
-          "label": "Garage (non-walkable)",
+          "label": "Garage",
           "vertex_prefix": "G",
           "bounds": [
             [
@@ -735,7 +735,7 @@
       "rooms": [
         {
           "name": "hallway",
-          "label": "3rd Floor Hallway",
+          "label": "3F Hallway",
           "vertex_prefix": "H",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -797,7 +797,7 @@
               ]
             },
             {
-              "to": "wife_office",
+              "to": "office",
               "type": "door",
               "label": "H.A-H.B",
               "center": [
@@ -959,8 +959,8 @@
           ]
         },
         {
-          "name": "wife_office",
-          "label": "Wife's Office",
+          "name": "office",
+          "label": "3F Office",
           "vertex_prefix": "W",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -1236,7 +1236,7 @@
         },
         {
           "name": "staircase",
-          "label": "Staircase (3F landing)",
+          "label": "Staircase (3F)",
           "vertex_prefix": "S",
           "ceiling_height_ft": 7.95,
           "bounds": [
@@ -1317,14 +1317,14 @@
           "_note": "AtomS3 Lite — 3F Hallway, wall H.H-H.G, 50⁷⁄₁₆\" from H.H"
         },
         {
-          "id": "3F_Wifes_Office",
+          "id": "3F_Office",
           "position": [
             10.38,
             19.48
           ],
           "height_ft": 1.02,
           "mac": "AC:A7:04:03:E9:74",
-          "_note": "AtomS3 Lite — 3F Wife's Office, wall W.B-W.C, 41¹⁵⁄₁₆\" from W.C"
+          "_note": "AtomS3 Lite — 3F Office, wall W.B-W.C, 41¹⁵⁄₁₆\" from W.C"
         }
       ],
       "stairs": [
