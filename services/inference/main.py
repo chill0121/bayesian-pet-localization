@@ -32,9 +32,9 @@ from db import Database
 from features import FeatureEngine
 
 try:
-    from models.classifier import RoomClassifier
+    from models.classifier import ZoneClassifier
 except ImportError:
-    RoomClassifier = None  # type: ignore[misc,assignment]
+    ZoneClassifier = None  # type: ignore[misc,assignment]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -123,11 +123,8 @@ _last_inference_mono: float = 0.0  # monotonic clock for rate-limiting
 # Feature engineering pipeline
 feature_engine: Optional[FeatureEngine] = None
 
-# Room classifier (Random Forest)
-room_classifier: Optional[RoomClassifier] = None
-
-# Confidence threshold for RF label override (Option A fusion)
-RF_CONFIDENCE_THRESHOLD = float(os.getenv("RF_CONFIDENCE_THRESHOLD", "0.7"))
+# Zone classifier (Random Forest sub-zone prediction)
+zone_classifier: Optional[ZoneClassifier] = None
 
 # Path to model artifacts directory
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "models"))
@@ -351,7 +348,7 @@ def _label_room(x: float, y: float, floor: int) -> str:
     """
 
 
-def _load_active_classifier() -> Optional[RoomClassifier]:
+def _load_active_classifier() -> Optional[ZoneClassifier]:
     """Load the active RF model from disk if one exists.
 
     Checks the ``models/`` directory for ``random_forest_v*.joblib`` files.
@@ -361,7 +358,7 @@ def _load_active_classifier() -> Optional[RoomClassifier]:
 
     Returns ``None`` if no model is available (expected before first training).
     """
-    global room_classifier
+    global zone_classifier
     model_dir = Path(MODEL_DIR)
 
     # Try DB-driven model path first
@@ -379,7 +376,7 @@ def _load_active_classifier() -> Optional[RoomClassifier]:
             if row and row[0]:
                 artifact_path = Path(row[0])
                 if artifact_path.exists():
-                    clf = RoomClassifier.from_file(str(artifact_path))
+                    clf = ZoneClassifier.from_file(str(artifact_path))
                     logger.info("Loaded active RF model from DB: %s", artifact_path)
                     return clf
         except Exception as e:
@@ -391,7 +388,7 @@ def _load_active_classifier() -> Optional[RoomClassifier]:
         if joblib_files:
             newest = joblib_files[-1]
             try:
-                clf = RoomClassifier.from_file(str(newest))
+                clf = ZoneClassifier.from_file(str(newest))
                 logger.info("Loaded RF model from disk: %s", newest)
                 return clf
             except Exception as e:
@@ -471,29 +468,8 @@ def run_inference(device_id: str):
     _last_inference_time = now
     _last_inference_mono = now_mono
 
-    # --- 5. Room label --------------------------------------------------------
+    # --- 5. Room label (from particle filter position) -------------------------
     polygon_label = _label_room(estimate["x"], estimate["y"], estimate["floor"])
-
-    # --- 5b. RF classifier prediction (if model loaded) ----------------------
-    rf_label = None
-    rf_confidence = 0.0
-    rf_probabilities = {}
-    if room_classifier is not None and room_classifier.is_trained:
-        try:
-            rf_full_label, rf_confidence, rf_probabilities = room_classifier.predict(
-                computed_features, smoothed_rssi=smoothed_rssi
-            )
-            # rf_full_label is floor-qualified e.g. "2F_kitchen" — extract room name
-            parts = rf_full_label.split("_", 1)
-            rf_label = parts[1] if len(parts) == 2 else rf_full_label
-        except Exception as e:
-            logger.warning("RF classifier prediction failed: %s", e)
-
-    # --- 5c. Label fusion (Option A: confidence-threshold override) -----------
-    if rf_label is not None and rf_confidence >= RF_CONFIDENCE_THRESHOLD:
-        location_label = rf_label
-    else:
-        location_label = polygon_label
 
     # --- 6. Floor belief from HMM (if available) ------------------------------
     floor_belief = None
@@ -509,7 +485,34 @@ def run_inference(device_id: str):
     else:
         activity_label = "moving"
 
-    # --- 8. Update position state ---------------------------------------------
+    # --- 8. Hierarchical sub-zone prediction ----------------------------------
+    # Particle filter determines the room (polygon lookup).
+    # RF classifier refines to a sub-zone within that room.
+    # Zone smoother applies activity-adaptive EMA to prevent snapping.
+    zone_label = None
+    zone_confidence = 0.0
+    zone_probabilities = {}
+
+    if zone_classifier is not None and zone_classifier.is_trained:
+        try:
+            zone_label, zone_confidence, zone_probabilities = (
+                zone_classifier.predict_for_room(
+                    computed_features,
+                    smoothed_rssi=smoothed_rssi,
+                    room=polygon_label,
+                )
+            )
+        except Exception as e:
+            logger.warning("Zone classifier prediction failed: %s", e)
+
+    # --- 9. Final fused label -------------------------------------------------
+    # If sub-zone prediction is available, use it; else fall back to room label.
+    if zone_label is not None:
+        location_label = zone_label
+    else:
+        location_label = polygon_label
+
+    # --- 10. Update position state --------------------------------------------
     position_update = {
         "x": round(estimate["x"], 2),
         "y": round(estimate["y"], 2),
@@ -524,8 +527,9 @@ def run_inference(device_id: str):
         "particle_count": estimate.get("particle_count", 0),
         "floor_belief": floor_belief,
         "polygon_label": polygon_label,
-        "rf_label": rf_label,
-        "rf_confidence": round(rf_confidence, 3) if rf_confidence else 0.0,
+        "zone_label": zone_label,
+        "zone_confidence": round(zone_confidence, 3),
+        "zone_probabilities": zone_probabilities,
     }
     current_position.update(position_update)
 
@@ -755,12 +759,12 @@ async def get_stats():
     if floor_hmm is not None:
         stats["pipeline"]["floor_belief"] = floor_hmm.floor_belief
         stats["pipeline"]["most_likely_floor"] = floor_hmm.most_likely_floor
-    if room_classifier is not None:
-        stats["pipeline"]["rf_classifier_active"] = room_classifier.is_trained
-        stats["pipeline"]["rf_classes"] = room_classifier.classes
-        stats["pipeline"]["rf_confidence_threshold"] = RF_CONFIDENCE_THRESHOLD
+    if zone_classifier is not None:
+        stats["pipeline"]["zone_classifier_active"] = zone_classifier.is_trained
+        stats["pipeline"]["zone_classes"] = zone_classifier.classes
+        stats["pipeline"]["zone_to_room"] = zone_classifier.zone_to_room
     else:
-        stats["pipeline"]["rf_classifier_active"] = False
+        stats["pipeline"]["zone_classifier_active"] = False
     return stats
 
 
@@ -791,7 +795,7 @@ async def get_particles():
 async def startup_event():
     """Start MQTT client and initialize connections on application startup."""
     global occupancy_grids, kalman_bank, particle_filter, floor_hmm
-    global room_polygons, room_gates, feature_engine, room_classifier, db
+    global room_polygons, room_gates, feature_engine, zone_classifier, db
     logger.info("Starting inference service...")
 
     # Load floor plan anchor coordinates
@@ -869,8 +873,8 @@ async def startup_event():
     )
     logger.info("Feature engine initialised")
 
-    # Room classifier — load active model if one exists
-    room_classifier = _load_active_classifier()
+    # Zone classifier — load active model if one exists
+    zone_classifier = _load_active_classifier()
 
     # Initialize InfluxDB
     init_influxdb()
