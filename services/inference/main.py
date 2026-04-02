@@ -248,6 +248,13 @@ current_position = {
     "timestamp": None,
 }
 
+# Beacon telemetry (populated from TLM fields in iBeacon payloads)
+beacon_telemetry: dict = {
+    "battery_mv": None,
+    "temp_c": None,
+    "updated": None,
+}
+
 # -----------------------------------------------------------------------------
 # MQTT Client
 # -----------------------------------------------------------------------------
@@ -306,6 +313,13 @@ def on_message(client, userdata, msg):
             
             # Log to RSSI history and InfluxDB for our beacon
             if device_id == BEACON_ID:
+                # Extract TLM telemetry (battery, temperature) when present
+                if "mV" in payload:
+                    beacon_telemetry["battery_mv"] = payload["mV"]
+                    beacon_telemetry["updated"] = now
+                if "temp" in payload:
+                    beacon_telemetry["temp_c"] = payload["temp"]
+
                 rssi_history.append({
                     "anchor_id": anchor_id,
                     "rssi": rssi_val,
@@ -617,6 +631,8 @@ class HealthResponse(BaseModel):
     status: str
     mqtt_connected: bool
     anchors_active: int
+    beacon_battery_mv: Optional[int] = None
+    beacon_temp_c: Optional[float] = None
 
 
 @app.get("/")
@@ -632,6 +648,8 @@ async def health():
         "status": "ok" if mqtt_connected else "degraded",
         "mqtt_connected": mqtt_connected,
         "anchors_active": len(rssi_buffer.get(BEACON_ID, {})),
+        "beacon_battery_mv": beacon_telemetry.get("battery_mv"),
+        "beacon_temp_c": beacon_telemetry.get("temp_c"),
     }
 
 
