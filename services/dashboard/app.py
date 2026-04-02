@@ -10,6 +10,7 @@ Theme: Dark (DARKLY bootstrap theme)
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import dash
@@ -17,7 +18,7 @@ import dash_bootstrap_components as dbc
 import numpy as np
 import plotly.graph_objects as go
 import requests
-from dash import Input, Output, State, dcc, html
+from dash import Input, Output, Patch, State, clientside_callback, dcc, html
 from dash.exceptions import PreventUpdate
 
 # -----------------------------------------------------------------------------
@@ -163,13 +164,50 @@ def hex_to_rgba(hex_color, alpha):
     return f"rgba({r},{g},{b},{alpha})"
 
 
+def _density_colors(px, py, radius=2.0):
+    """Return normalised [0,1] density score for each particle.
+
+    For each particle, counts how many other particles fall within
+    *radius* (feet) using a simple grid-binning approach (O(N) instead
+    of O(N²) pairwise distance).
+    """
+    if len(px) < 2:
+        return [0.5] * len(px)
+    inv_r = 1.0 / radius
+    # Bin particles into grid cells of size `radius`
+    from collections import Counter
+    bins = Counter()
+    keys = []
+    for x, y in zip(px, py):
+        k = (int(x * inv_r), int(y * inv_r))
+        bins[k] += 1
+        keys.append(k)
+    # Each particle's density = sum of counts in its cell + 8 neighbours
+    counts = []
+    for k in keys:
+        total = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                total += bins.get((k[0] + dx, k[1] + dy), 0)
+        counts.append(total)
+    max_c = max(counts)
+    min_c = min(counts)
+    rng = max_c - min_c
+    if rng == 0:
+        return [0.5] * len(px)
+    return [(c - min_c) / rng for c in counts]
+
+
 # -----------------------------------------------------------------------------
 # Floor Plan Renderer
 # -----------------------------------------------------------------------------
 
+_dynamic_start = {}   # {floor_num: index of first dynamic trace}
+
 
 def render_floor(floor_data, position=None, particles=None, trail=None,
-                 is_active=True, show_heatmap=False, show_particles=True):
+                 is_active=True, show_heatmap=False, show_particles=True,
+                 color_density=False):
     """Build a Plotly figure for one floor.
 
     Args:
@@ -180,6 +218,7 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
         is_active:  True for the main view, False for dimmed thumbnails.
         show_heatmap: Show density heatmap overlay instead of/alongside particles.
         show_particles: Show individual particle scatter markers.
+        color_density: Color particles by spatial density instead of weight.
     """
     fig = go.Figure()
     floor_num = floor_data["floor"]
@@ -300,75 +339,87 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
             hoverinfo="text",
         ))
 
-    # ── Active-only overlays ──
+    # ── Active-only dynamic overlays (fixed 9 traces for Patch support) ──
     if is_active:
-        # ── Particle cloud ──
+        _dynamic_start[floor_num] = len(fig.data)
+
+        # ── [+0] Particle cloud ──
+        px, py, pw_norm = [], [], []
+        p_vis = False
         if particles:
             mask = [i for i, f in enumerate(particles["floor"])
                     if f == floor_num]
-            if mask:
+            if mask and show_particles:
                 px = [particles["x"][i] for i in mask]
                 py = [particles["y"][i] for i in mask]
                 pw = [particles["weight"][i] for i in mask]
                 max_w = max(pw) if pw else 1.0
-                pw_norm = [w / max_w for w in pw]
-                if show_particles:
-                    fig.add_trace(go.Scatter(
-                        x=px, y=py, mode="markers",
-                        marker=dict(size=4, color=pw_norm,
-                                    colorscale="Viridis", opacity=0.55,
-                                    showscale=False),
-                        showlegend=False, hoverinfo="skip",
-                    ))
+                pw_norm = (_density_colors(px, py) if color_density
+                           else [w / max_w for w in pw])
+                p_vis = True
+        fig.add_trace(go.Scatter(
+            x=px, y=py, mode="markers",
+            marker=dict(size=4, color=pw_norm or None,
+                        colorscale="Viridis", opacity=0.55,
+                        showscale=False),
+            showlegend=False, hoverinfo="skip", visible=p_vis,
+        ))
 
-                # ── Density heatmap overlay ──
-                if show_heatmap and len(px) > 2:
-                    fig.add_trace(go.Histogram2dContour(
-                        x=px, y=py,
-                        colorscale=[
-                            [0, "rgba(0,0,0,0)"],
-                            [0.2, "rgba(68,1,84,0.35)"],
-                            [0.4, "rgba(59,82,139,0.50)"],
-                            [0.6, "rgba(33,145,140,0.60)"],
-                            [0.8, "rgba(53,183,121,0.70)"],
-                            [1.0, "rgba(94,201,98,0.80)"],
-                        ],
-                        ncontours=12,
-                        showscale=False,
-                        line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
-                        hoverinfo="skip",
-                        showlegend=False,
-                    ))
+        # ── [+1] Density heatmap overlay ──
+        h_vis = bool(px and show_heatmap and len(px) > 2)
+        fig.add_trace(go.Histogram2dContour(
+            x=px if h_vis else [0],
+            y=py if h_vis else [0],
+            colorscale=[
+                [0, "rgba(0,0,0,0)"],
+                [0.2, "rgba(68,1,84,0.35)"],
+                [0.4, "rgba(59,82,139,0.50)"],
+                [0.6, "rgba(33,145,140,0.60)"],
+                [0.8, "rgba(53,183,121,0.70)"],
+                [1.0, "rgba(94,201,98,0.80)"],
+            ],
+            ncontours=12,
+            showscale=False,
+            line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
+            hoverinfo="skip",
+            showlegend=False,
+            visible=h_vis,
+        ))
 
-        # ── Position trail (fading segments) ──
+        # ── [+2..+6] Position trail (5 fading segments) ──
+        same_floor = []
         if trail:
             same_floor = [t for t in trail
                           if t.get("floor") == floor_num][-60:]
-            n = len(same_floor)
-            if n > 1:
-                segs = 5
-                seg_sz = max(1, n // segs)
-                for s in range(segs):
-                    lo = s * seg_sz
-                    hi = min(lo + seg_sz + 1, n)
-                    alpha = 0.25 + 0.65 * (s / segs)
-                    fig.add_trace(go.Scatter(
-                        x=[t["x"] for t in same_floor[lo:hi]],
-                        y=[t["y"] for t in same_floor[lo:hi]],
-                        mode="lines",
-                        line=dict(
-                            color=f"rgba(255,38,146,{alpha:.2f})",
-                            width=2,
-                        ),
-                        showlegend=False, hoverinfo="skip",
-                    ))
+        n_trail = len(same_floor)
+        for s in range(5):
+            if n_trail > 1:
+                seg_sz = max(1, n_trail // 5)
+                lo = s * seg_sz
+                hi = min(lo + seg_sz + 1, n_trail)
+                alpha = 0.25 + 0.65 * (s / 5)
+                fig.add_trace(go.Scatter(
+                    x=[t["x"] for t in same_floor[lo:hi]],
+                    y=[t["y"] for t in same_floor[lo:hi]],
+                    mode="lines",
+                    line=dict(
+                        color=f"rgba(255,38,146,{alpha:.2f})",
+                        width=2,
+                    ),
+                    showlegend=False, hoverinfo="skip",
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=[], y=[], mode="lines",
+                    line=dict(color="rgba(255,38,146,0.25)", width=2),
+                    showlegend=False, hoverinfo="skip", visible=False,
+                ))
 
-        # ── Position marker ──
+        # ── [+7] Confidence circle  ── [+8] Dog marker ──
         if position and position.get("floor") == floor_num:
             x, y = position["x"], position["y"]
             conf = position.get("confidence", 0.5)
 
-            # Confidence circle
             radius = 2.5 * (1 - conf) + 0.4
             theta = np.linspace(0, 2 * np.pi, 60)
             fig.add_trace(go.Scatter(
@@ -380,8 +431,6 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                           width=1, dash="dash"),
                 showlegend=False, hoverinfo="skip",
             ))
-
-            # Dog dot
             fig.add_trace(go.Scatter(
                 x=[x], y=[y],
                 mode="markers+text",
@@ -397,15 +446,50 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                 ),
                 hoverinfo="text",
             ))
+        else:
+            fig.add_trace(go.Scatter(
+                x=[], y=[], mode="lines", fill="toself",
+                fillcolor="rgba(187,0,93,0.08)",
+                line=dict(color="rgba(187,0,93,0.45)",
+                          width=1, dash="dash"),
+                showlegend=False, hoverinfo="skip", visible=False,
+            ))
+            fig.add_trace(go.Scatter(
+                x=[], y=[], mode="markers+text",
+                marker=dict(size=14, color="#bb005d",
+                            line=dict(width=2, color="#80003f")),
+                text=["🐕"], textposition="top center",
+                textfont=dict(size=16),
+                showlegend=False, hoverinfo="text", visible=False,
+            ))
+
+    # ── Thumbnail particle overlay ──
+    if not is_active and particles:
+        mask = [i for i, f in enumerate(particles["floor"])
+                if f == floor_num]
+        if mask:
+            px = [particles["x"][i] for i in mask]
+            py = [particles["y"][i] for i in mask]
+            pw = [particles["weight"][i] for i in mask]
+            max_w = max(pw) if pw else 1.0
+            pw_norm = (_density_colors(px, py) if color_density
+                       else [w / max_w for w in pw])
+            fig.add_trace(go.Scatter(
+                x=px, y=py, mode="markers",
+                marker=dict(size=2, color=pw_norm,
+                            colorscale="Viridis", opacity=0.5,
+                            showscale=False),
+                showlegend=False, hoverinfo="skip",
+            ))
 
     # ── Layout ──
-    pad = 1.5
+    pad = 0.5 if is_active else 1.5
     x_range = ([min(all_x) - pad, max(all_x) + pad]
                if all_x else [-1, 20])
     y_range = ([min(all_y) - pad, max(all_y) + pad]
                if all_y else [-1, 20])
 
-    height = 520 if is_active else 220
+    height = 680 if is_active else 220
     fig.update_layout(
         plot_bgcolor=PLOT_BG if is_active else "#111827",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -418,7 +502,7 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                    title="ft" if is_active else None,
                    tickfont=dict(size=9, color=MUTED_TEXT),
                    title_font=dict(size=10, color=MUTED_TEXT)),
-        margin=(dict(l=35, r=10, t=35, b=35) if is_active
+        margin=(dict(l=35, r=10, t=35, b=25) if is_active
                 else dict(l=20, r=5, t=30, b=15)),
         height=height,
         showlegend=False,
@@ -428,6 +512,91 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
         ),
     )
     return fig
+
+
+def _patch_active_dynamic(n_static, floor_num, position, particles, trail,
+                          show_heatmap, show_particles, color_density=False):
+    """Return a Patch updating only the 9 dynamic trace slots."""
+    p = Patch()
+
+    # ── [+0] Particle cloud ──
+    pidx = n_static
+    px, py, pw_norm = [], [], []
+    p_vis = False
+    if particles:
+        mask = [i for i, f in enumerate(particles["floor"])
+                if f == floor_num]
+        if mask and show_particles:
+            px = [particles["x"][i] for i in mask]
+            py = [particles["y"][i] for i in mask]
+            pw = [particles["weight"][i] for i in mask]
+            max_w = max(pw) if pw else 1.0
+            pw_norm = (_density_colors(px, py) if color_density
+                       else [w / max_w for w in pw])
+            p_vis = True
+    p["data"][pidx]["x"] = px
+    p["data"][pidx]["y"] = py
+    if p_vis:
+        p["data"][pidx]["marker"]["color"] = pw_norm
+    p["data"][pidx]["visible"] = p_vis
+
+    # ── [+1] Density heatmap ──
+    hidx = n_static + 1
+    h_vis = bool(px and show_heatmap and len(px) > 2)
+    p["data"][hidx]["x"] = px if h_vis else [0]
+    p["data"][hidx]["y"] = py if h_vis else [0]
+    p["data"][hidx]["visible"] = h_vis
+
+    # ── [+2..+6] Trail segments ──
+    same_floor = []
+    if trail:
+        same_floor = [t for t in trail
+                      if t.get("floor") == floor_num][-60:]
+    n_trail = len(same_floor)
+    for s in range(5):
+        tidx = n_static + 2 + s
+        if n_trail > 1:
+            seg_sz = max(1, n_trail // 5)
+            lo = s * seg_sz
+            hi = min(lo + seg_sz + 1, n_trail)
+            alpha = 0.25 + 0.65 * (s / 5)
+            p["data"][tidx]["x"] = [t["x"] for t in same_floor[lo:hi]]
+            p["data"][tidx]["y"] = [t["y"] for t in same_floor[lo:hi]]
+            p["data"][tidx]["line"]["color"] = (
+                f"rgba(255,38,146,{alpha:.2f})")
+            p["data"][tidx]["visible"] = True
+        else:
+            p["data"][tidx]["x"] = []
+            p["data"][tidx]["y"] = []
+            p["data"][tidx]["visible"] = False
+
+    # ── [+7] Confidence circle  ── [+8] Dog marker ──
+    cidx = n_static + 7
+    didx = n_static + 8
+    if position and position.get("floor") == floor_num:
+        x, y = position["x"], position["y"]
+        conf = position.get("confidence", 0.5)
+        radius = 2.5 * (1 - conf) + 0.4
+        theta = np.linspace(0, 2 * np.pi, 60)
+        p["data"][cidx]["x"] = (x + radius * np.cos(theta)).tolist()
+        p["data"][cidx]["y"] = (y + radius * np.sin(theta)).tolist()
+        p["data"][cidx]["visible"] = True
+        p["data"][didx]["x"] = [x]
+        p["data"][didx]["y"] = [y]
+        p["data"][didx]["hovertext"] = (
+            f"{position.get('location_label', '')}<br>"
+            f"({x:.1f}, {y:.1f})<br>"
+            f"Confidence: {conf:.0%}")
+        p["data"][didx]["visible"] = True
+    else:
+        p["data"][cidx]["x"] = []
+        p["data"][cidx]["y"] = []
+        p["data"][cidx]["visible"] = False
+        p["data"][didx]["x"] = []
+        p["data"][didx]["y"] = []
+        p["data"][didx]["visible"] = False
+
+    return p
 
 
 def _draw_door(fig, door, color="#00aa44"):
@@ -563,13 +732,12 @@ def build_timeline(history, window_label="1h"):
                 showlegend=False, hoverinfo="skip",
                 width=0.6,
             ))
-            if t_end - t_start > 2:
-                fig.add_annotation(
-                    x=(t_start + t_end) / 2, y="Floor",
-                    text=FLOOR_LABELS.get(prev_floor, str(prev_floor)),
-                    showarrow=False,
-                    font=dict(size=9, color="white", family="monospace"),
-                )
+            fig.add_annotation(
+                x=(t_start + t_end) / 2, y="Floor",
+                text=FLOOR_LABELS.get(prev_floor, str(prev_floor)),
+                showarrow=False,
+                font=dict(size=9, color="white", family="monospace"),
+            )
             prev_floor = cur_floor
             seg_start = i
 
@@ -630,16 +798,21 @@ def build_rssi_sparklines(rssi_history):
     if not rssi_history:
         return _empty_figure("No RSSI history", height=300)
 
-    # Collect anchor-keyed time series
+    # Each entry is {anchor_id, rssi, distance, timestamp} (one per message)
     series = {}
-    for i, entry in enumerate(rssi_history):
-        for anchor_id, val in entry.items():
-            if anchor_id.startswith("_") or anchor_id == "timestamp":
-                continue
-            rssi_val = val.get("rssi", val) if isinstance(val, dict) else val
-            series.setdefault(anchor_id, {"idx": [], "rssi": []})
-            series[anchor_id]["idx"].append(i)
-            series[anchor_id]["rssi"].append(rssi_val)
+    for entry in rssi_history:
+        aid = entry.get("anchor_id")
+        rssi_val = entry.get("rssi")
+        if not aid or rssi_val is None:
+            # Fallback: old dict-of-anchors format
+            for k, v in entry.items():
+                if k.startswith("_") or k == "timestamp":
+                    continue
+                rv = v.get("rssi", v) if isinstance(v, dict) else v
+                if isinstance(rv, (int, float)):
+                    series.setdefault(k, []).append(rv)
+            continue
+        series.setdefault(aid, []).append(rssi_val)
 
     if not series:
         return _empty_figure("No RSSI history", height=300)
@@ -647,9 +820,9 @@ def build_rssi_sparklines(rssi_history):
     fig = go.Figure()
     colors = ["#4fc3f7", "#66bb6a", "#ffa726", "#ef5350", "#ab47bc",
               "#26c6da", "#ffee58", "#ec407a", "#8d6e63", "#78909c"]
-    for ci, (aid, data) in enumerate(sorted(series.items())):
+    for ci, (aid, rssi_vals) in enumerate(sorted(series.items())):
         fig.add_trace(go.Scatter(
-            x=data["idx"], y=data["rssi"],
+            x=list(range(len(rssi_vals))), y=rssi_vals,
             mode="lines", name=aid,
             line=dict(color=colors[ci % len(colors)], width=1.5),
         ))
@@ -757,11 +930,6 @@ app = dash.Dash(
 server = app.server  # WSGI entry-point for gunicorn
 
 
-def _status_badge(label, ok):
-    color = "success" if ok else "danger"
-    return dbc.Badge(label, color=color, className="me-2 px-2 py-1")
-
-
 # ── Layout ───────────────────────────────────────────────────────────────────
 
 app.layout = dbc.Container(fluid=True, className="py-3", children=[
@@ -775,6 +943,7 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
     dcc.Store(id="store-rssi"),
     dcc.Store(id="store-health"),
     dcc.Store(id="store-trail"),
+    dcc.Store(id="store-displayed-floor"),
 
     # ── Header ──
     dbc.Row(className="mb-3 align-items-center", children=[
@@ -785,7 +954,16 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                        className="text-muted"),
         ]),
         dbc.Col(width=5, className="text-end", children=[
-            html.Div(id="header-badges"),
+            html.Div(id="header-badges", children=[
+                dbc.Badge("API: ?", id="badge-api", color="danger",
+                          className="me-2 px-2 py-1"),
+                dbc.Badge("MQTT ✗", id="badge-mqtt", color="danger",
+                          className="me-2 px-2 py-1"),
+                dbc.Badge("Anchors: 0", id="badge-anchors", color="danger",
+                          className="me-2 px-2 py-1"),
+                dbc.Badge("🔋 —", id="badge-battery", color="secondary",
+                          className="me-2 px-2 py-1"),
+            ]),
             html.Div([
                 html.Small("Refresh: ", className="text-muted me-1"),
                 dbc.Select(
@@ -809,7 +987,44 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
     ]),
 
     # ── Summary metrics ──
-    dbc.Row(id="metric-row", className="mb-3 g-2"),
+    dbc.Row(className="mb-3 g-2", children=[
+        dbc.Col(width=6, md=3, children=[
+            dbc.Card(className="bg-dark border-secondary text-center", children=[
+                dbc.CardBody([
+                    html.Small("Location", className="text-muted d-block"),
+                    html.H5("—", id="metric-location",
+                            className="mb-0 text-light"),
+                ], className="py-2"),
+            ]),
+        ]),
+        dbc.Col(width=6, md=3, children=[
+            dbc.Card(className="bg-dark border-secondary text-center", children=[
+                dbc.CardBody([
+                    html.Small("Floor", className="text-muted d-block"),
+                    html.H5("—", id="metric-floor",
+                            className="mb-0 text-light"),
+                ], className="py-2"),
+            ]),
+        ]),
+        dbc.Col(width=6, md=3, children=[
+            dbc.Card(className="bg-dark border-secondary text-center", children=[
+                dbc.CardBody([
+                    html.Small("Confidence", className="text-muted d-block"),
+                    html.H5("—", id="metric-confidence",
+                            className="mb-0 text-light"),
+                ], className="py-2"),
+            ]),
+        ]),
+        dbc.Col(width=6, md=3, children=[
+            dbc.Card(className="bg-dark border-secondary text-center", children=[
+                dbc.CardBody([
+                    html.Small("Activity", className="text-muted d-block"),
+                    html.H5("—", id="metric-activity",
+                            className="mb-0 text-light"),
+                ], className="py-2"),
+            ]),
+        ]),
+    ]),
 
     # ── Tabs ──
     dbc.Tabs(id="tabs", active_tab="live", className="mb-3", children=[
@@ -831,6 +1046,8 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                                          "value": "particles"},
                                         {"label": " Density Heatmap",
                                          "value": "heatmap"},
+                                        {"label": " Color by Density",
+                                         "value": "color_density"},
                                     ],
                                     value=["particles"],
                                     inline=True,
@@ -871,9 +1088,9 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                     ]),
                 ]),
             ]),
-            # Floor thumbnails
-            dbc.Row(className="g-2 my-3", children=[
-                dbc.Col(width=4, children=[
+            # Floor thumbnails (non-active floors only, left-aligned)
+            dbc.Row(className="g-2 mt-2 mb-1", children=[
+                dbc.Col(id="thumb-col-1", width=6, lg=4, children=[
                     dbc.Card(className="bg-dark border-secondary",
                              id="thumb-card-1", children=[
                         dbc.CardBody([
@@ -882,7 +1099,7 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                         ], className="p-1"),
                     ]),
                 ]),
-                dbc.Col(width=4, children=[
+                dbc.Col(id="thumb-col-2", width=6, lg=4, children=[
                     dbc.Card(className="bg-dark border-secondary",
                              id="thumb-card-2", children=[
                         dbc.CardBody([
@@ -891,7 +1108,7 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                         ], className="p-1"),
                     ]),
                 ]),
-                dbc.Col(width=4, children=[
+                dbc.Col(id="thumb-col-3", width=6, lg=4, children=[
                     dbc.Card(className="bg-dark border-secondary",
                              id="thumb-card-3", children=[
                         dbc.CardBody([
@@ -902,7 +1119,7 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                 ]),
             ]),
             # Timeline
-            dbc.Row(className="g-2", children=[
+            dbc.Row(className="g-2 mt-1", children=[
                 dbc.Col(width=12, children=[
                     dbc.Card(className="bg-dark border-secondary", children=[
                         dbc.CardBody([
@@ -1028,17 +1245,77 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
 # Callbacks
 # -----------------------------------------------------------------------------
 
-# ── Refresh rate control ──
-@app.callback(
+# ── Refresh rate control (clientside) ──
+app.clientside_callback(
+    """
+    function(val) {
+        const ms = parseInt(val);
+        if (ms === 0) return [5000, true];
+        return [ms, false];
+    }
+    """,
     Output("interval", "interval"),
     Output("interval", "disabled"),
     Input("refresh-select", "value"),
 )
-def set_refresh_rate(val):
-    ms = int(val)
-    if ms == 0:
-        return 5000, True
-    return ms, False
+
+# ── Header badges (clientside) ──
+app.clientside_callback(
+    """
+    function(health) {
+        if (!health) return ["API Offline", "danger", "MQTT ✗", "danger",
+                             "Anchors: 0", "danger", "🔋 —", "secondary"];
+        const apiOk = health.status === "ok";
+        const mqttOk = !!health.mqtt_connected;
+        const anchors = health.anchors_active || 0;
+        // Battery: CR2032 ranges ~3000mV (full) to ~2000mV (dead)
+        let batText = "🔋 —";
+        let batColor = "secondary";
+        const mv = health.beacon_battery_mv;
+        if (mv != null) {
+            const pct = Math.min(100, Math.max(0, Math.round((mv - 2000) / 10)));
+            batText = "🔋 " + pct + "% (" + mv + "mV)";
+            batColor = pct > 40 ? "success" : pct > 15 ? "warning" : "danger";
+        }
+        return [
+            "API: " + (health.status || "?"), apiOk ? "success" : "danger",
+            mqttOk ? "MQTT" : "MQTT ✗", mqttOk ? "success" : "danger",
+            "Anchors: " + anchors, anchors > 0 ? "success" : "danger",
+            batText, batColor,
+        ];
+    }
+    """,
+    Output("badge-api", "children"), Output("badge-api", "color"),
+    Output("badge-mqtt", "children"), Output("badge-mqtt", "color"),
+    Output("badge-anchors", "children"), Output("badge-anchors", "color"),
+    Output("badge-battery", "children"), Output("badge-battery", "color"),
+    Input("store-health", "data"),
+)
+
+# ── Summary metrics (clientside) ──
+app.clientside_callback(
+    """
+    function(pos) {
+        const icons = {"sleeping": "😴", "stationary": "🐕",
+                        "moving": "🏃", "unknown": "❓"};
+        if (!pos) return ["—", "—", "—", "—"];
+        const act = pos.activity || "unknown";
+        const icon = icons[act] || "";
+        const conf = pos.confidence || 0;
+        return [
+            pos.location_label || "Unknown",
+            "Floor " + (pos.floor || "?"),
+            Math.round(conf * 100) + "%",
+            icon + " " + act.charAt(0).toUpperCase() + act.slice(1),
+        ];
+    }
+    """,
+    Output("metric-location", "children"),
+    Output("metric-floor", "children"),
+    Output("metric-confidence", "children"),
+    Output("metric-activity", "children"),
+    Input("store-position", "data"),
+)
 
 
 # ── Data fetch (fires on every interval tick) ──
@@ -1051,67 +1328,14 @@ def set_refresh_rate(val):
     Input("interval", "n_intervals"),
 )
 def fetch_data(_n):
-    position = fetch_position()
-    particles = fetch_particles()
-    rssi = fetch_rssi()
-    health = fetch_health()
-    trail = fetch_position_history(limit=120)
-    return position, particles, rssi, health, trail
-
-
-# ── Header badges ──
-@app.callback(
-    Output("header-badges", "children"),
-    Input("store-health", "data"),
-)
-def update_badges(health):
-    if not health:
-        return [_status_badge("API Offline", False)]
-    return [
-        _status_badge(
-            f"API: {health.get('status', '?')}",
-            health.get("status") == "ok",
-        ),
-        _status_badge(
-            "MQTT" if health.get("mqtt_connected") else "MQTT ✗",
-            health.get("mqtt_connected", False),
-        ),
-        _status_badge(
-            f"Anchors: {health.get('anchors_active', 0)}",
-            health.get("anchors_active", 0) > 0,
-        ),
-    ]
-
-
-# ── Metric row ──
-@app.callback(
-    Output("metric-row", "children"),
-    Input("store-position", "data"),
-)
-def update_metrics(pos):
-    if not pos:
-        vals = [("Location", "—"), ("Floor", "—"),
-                ("Confidence", "—"), ("Activity", "—")]
-    else:
-        act = pos.get("activity", "unknown")
-        icon = ACTIVITY_ICONS.get(act, "")
-        vals = [
-            ("Location", pos.get("location_label", "Unknown")),
-            ("Floor", f"Floor {pos.get('floor', '?')}"),
-            ("Confidence", f"{pos.get('confidence', 0):.0%}"),
-            ("Activity", f"{icon} {act.title()}"),
-        ]
-    return [
-        dbc.Col(width=6, md=3, children=[
-            dbc.Card(className="bg-dark border-secondary text-center", children=[
-                dbc.CardBody([
-                    html.Small(label, className="text-muted d-block"),
-                    html.H5(value, className="mb-0 text-light"),
-                ], className="py-2"),
-            ]),
-        ])
-        for label, value in vals
-    ]
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        f_pos = ex.submit(fetch_position)
+        f_par = ex.submit(fetch_particles)
+        f_rssi = ex.submit(fetch_rssi)
+        f_health = ex.submit(fetch_health)
+        f_trail = ex.submit(fetch_position_history, 120)
+    return (f_pos.result(), f_par.result(), f_rssi.result(),
+            f_health.result(), f_trail.result())
 
 
 # ── Live Tracker tab ──
@@ -1124,23 +1348,29 @@ def update_metrics(pos):
     Output("activity-card", "children"),
     Output("rssi-bars", "figure"),
     Output("timeline", "figure"),
-    Output("thumb-card-1", "className"),
-    Output("thumb-card-2", "className"),
-    Output("thumb-card-3", "className"),
+    Output("thumb-col-1", "style"),
+    Output("thumb-col-2", "style"),
+    Output("thumb-col-3", "style"),
+    Output("store-displayed-floor", "data"),
     Input("store-position", "data"),
     Input("store-particles", "data"),
     Input("store-rssi", "data"),
     Input("store-trail", "data"),
     State("tabs", "active_tab"),
     State("viz-options", "value"),
+    State("interval", "n_intervals"),
+    State("active-floor", "figure"),
+    State("store-displayed-floor", "data"),
 )
-def update_live(position, particles, rssi, trail, active_tab, viz_options):
+def update_live(position, particles, rssi, trail, active_tab, viz_options,
+                n_intervals, current_fig, displayed_floor):
     if active_tab != "live":
         raise PreventUpdate
 
     viz_options = viz_options or []
     show_heatmap = "heatmap" in viz_options
     show_particles = "particles" in viz_options
+    color_density = "color_density" in viz_options
 
     fp = fetch_floorplan()
     floors_list = (fp.get("floorplan", {}).get("floors", [])
@@ -1148,32 +1378,53 @@ def update_live(position, particles, rssi, trail, active_tab, viz_options):
     floors_by_num = {f["floor"]: f for f in floors_list}
 
     active_floor = position.get("floor", 2) if position else 2
+    floor_changed = active_floor != displayed_floor
 
-    # Active floor figure
+    # Patch is safe only when: the browser has a figure for THIS floor,
+    # n_intervals > 2 (not a fresh page load), and we have the trace map.
+    n_static = _dynamic_start.get(active_floor)
+    can_patch = (not floor_changed
+                 and current_fig is not None
+                 and n_static is not None
+                 and (n_intervals or 0) > 2)
+
+    # ── Active floor figure ──
     if active_floor in floors_by_num:
-        main_fig = render_floor(
-            floors_by_num[active_floor], position, particles, trail,
-            is_active=True, show_heatmap=show_heatmap,
-            show_particles=show_particles,
-        )
+        if can_patch:
+            main_fig = _patch_active_dynamic(
+                n_static, active_floor, position, particles, trail,
+                show_heatmap, show_particles,
+                color_density=color_density,
+            )
+        else:
+            main_fig = render_floor(
+                floors_by_num[active_floor], position, particles, trail,
+                is_active=True, show_heatmap=show_heatmap,
+                show_particles=show_particles,
+                color_density=color_density,
+            )
     else:
         main_fig = _empty_figure("Floor data unavailable")
 
-    # Thumbnails
+    # ── Thumbnails (only non-active floors) ──
     thumbs = []
-    thumb_classes = []
     for fn in [1, 2, 3]:
-        is_active_thumb = fn == active_floor
-        cls = ("bg-dark border-primary" if is_active_thumb
-               else "bg-dark border-secondary")
-        thumb_classes.append(cls)
-        if fn in floors_by_num:
+        if fn in floors_by_num and fn != active_floor:
             thumbs.append(render_floor(
-                floors_by_num[fn], position, particles, None,
-                is_active=False,
-            ))
+                floors_by_num[fn], particles=particles,
+                is_active=False, color_density=color_density))
+        elif fn == active_floor:
+            thumbs.append(dash.no_update)
         else:
             thumbs.append(_empty_figure(f"Floor {fn}", height=220))
+
+    # ── Thumbnail visibility (hide active floor, expand others) ──
+    thumb_styles = []
+    for fn in [1, 2, 3]:
+        if fn == active_floor:
+            thumb_styles.append({"display": "none"})
+        else:
+            thumb_styles.append({})
 
     # Floor belief
     fb = position.get("floor_belief") if position else None
@@ -1197,7 +1448,7 @@ def update_live(position, particles, rssi, trail, active_tab, viz_options):
     timeline_fig = build_timeline(trail, "recent")
 
     return (main_fig, *thumbs, belief_fig, act_children, rssi_fig,
-            timeline_fig, *thumb_classes)
+            timeline_fig, *thumb_styles, active_floor)
 
 
 # ── Signals tab ──
