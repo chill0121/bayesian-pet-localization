@@ -8,6 +8,7 @@ Framework: Dash + Plotly (callback-based, no full-page reruns)
 Theme: Dark (DARKLY bootstrap theme)
 """
 
+import base64
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -67,6 +68,43 @@ ACTIVITY_ICONS = {
     "moving": "🏃",
     "unknown": "❓",
 }
+
+# Luna image assets (base64-encoded for Plotly layout images)
+_LUNA_DIR = os.path.join(os.path.dirname(__file__), "assets", "luna")
+
+def _load_b64(filename):
+    path = os.path.join(_LUNA_DIR, filename)
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+def _load_luna_set(prefix):
+    """Load all pre-resized luna PNGs matching prefix from the assets dir."""
+    imgs = []
+    if not os.path.isdir(_LUNA_DIR):
+        return imgs
+    for f in sorted(os.listdir(_LUNA_DIR)):
+        if f.startswith(prefix) and f.endswith(".png"):
+            b64 = _load_b64(f)
+            if b64:
+                imgs.append(b64)
+    return imgs
+
+import time as _time
+
+LUNA_ICON_B64 = _load_b64("icon.png")
+LUNA_MARKER_B64 = _load_b64("marker.png")
+LUNA_ICONS = _load_luna_set("Luna_Icon_") or [LUNA_ICON_B64]
+LUNA_MARKERS = _load_luna_set("Luna_Icon_") or [LUNA_MARKER_B64]
+LUNA_SLEEPS = _load_luna_set("Luna_Sleep_")
+LUNA_STATIONARIES = _load_luna_set("Luna_Stationary_")
+
+def _pick_luna(images, fallback=None):
+    """Pick an image from the list, cycling every 30 seconds."""
+    if not images:
+        return fallback
+    return images[int(_time.time() // 30) % len(images)]
 
 # -----------------------------------------------------------------------------
 # API Client
@@ -433,11 +471,9 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
             ))
             fig.add_trace(go.Scatter(
                 x=[x], y=[y],
-                mode="markers+text",
+                mode="markers",
                 marker=dict(size=14, color="#bb005d",
                             line=dict(width=2, color="#80003f")),
-                text=["🐕"], textposition="top center",
-                textfont=dict(size=16),
                 showlegend=False,
                 hovertext=(
                     f"{position.get('location_label', '')}<br>"
@@ -446,6 +482,15 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                 ),
                 hoverinfo="text",
             ))
+            if LUNA_MARKER_B64:
+                fig.add_layout_image(
+                    source=LUNA_MARKER_B64,
+                    x=x, y=y + 1.2,
+                    xref="x", yref="y",
+                    xanchor="center", yanchor="bottom",
+                    sizex=2.0, sizey=2.0,
+                    layer="above",
+                )
         else:
             fig.add_trace(go.Scatter(
                 x=[], y=[], mode="lines", fill="toself",
@@ -455,11 +500,8 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                 showlegend=False, hoverinfo="skip", visible=False,
             ))
             fig.add_trace(go.Scatter(
-                x=[], y=[], mode="markers+text",
-                marker=dict(size=14, color="#bb005d",
-                            line=dict(width=2, color="#80003f")),
-                text=["🐕"], textposition="top center",
-                textfont=dict(size=16),
+                x=[], y=[], mode="markers",
+                marker=dict(size=1, opacity=0),
                 showlegend=False, hoverinfo="text", visible=False,
             ))
 
@@ -588,6 +630,16 @@ def _patch_active_dynamic(n_static, floor_num, position, particles, trail,
             f"({x:.1f}, {y:.1f})<br>"
             f"Confidence: {conf:.0%}")
         p["data"][didx]["visible"] = True
+        marker_img = _pick_luna(LUNA_MARKERS, LUNA_MARKER_B64)
+        if marker_img:
+            p["layout"]["images"] = [dict(
+                source=marker_img,
+                x=x, y=y + 1.2,
+                xref="x", yref="y",
+                xanchor="center", yanchor="bottom",
+                sizex=2.0, sizey=2.0,
+                layer="above",
+            )]
     else:
         p["data"][cidx]["x"] = []
         p["data"][cidx]["y"] = []
@@ -595,6 +647,8 @@ def _patch_active_dynamic(n_static, floor_num, position, particles, trail,
         p["data"][didx]["x"] = []
         p["data"][didx]["y"] = []
         p["data"][didx]["visible"] = False
+        if LUNA_MARKER_B64:
+            p["layout"]["images"] = []
 
     return p
 
@@ -948,8 +1002,12 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
     # ── Header ──
     dbc.Row(className="mb-3 align-items-center", children=[
         dbc.Col(width=7, children=[
-            html.H3("🐕 Bayesian Pet Localization",
-                     className="mb-0 text-light"),
+            html.H3([
+                html.Img(src=_pick_luna(LUNA_ICONS, LUNA_ICON_B64),
+                         style={"height": "32px", "marginRight": "8px",
+                                "verticalAlign": "middle"}),
+                "Bayesian Pet Localization",
+            ], className="mb-0 text-light"),
             html.Small("Real-time indoor positioning system",
                        className="text-muted"),
         ]),
@@ -1296,17 +1354,16 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(pos) {
-        const icons = {"sleeping": "😴", "stationary": "🐕",
-                        "moving": "🏃", "unknown": "❓"};
+        const icons = {"sleeping": "😴", "stationary": "🐕", "moving": "🏃", "unknown": "❓"};
         if (!pos) return ["—", "—", "—", "—"];
         const act = pos.activity || "unknown";
-        const icon = icons[act] || "";
         const conf = pos.confidence || 0;
+        const label = act.charAt(0).toUpperCase() + act.slice(1);
         return [
             pos.location_label || "Unknown",
             "Floor " + (pos.floor || "?"),
             Math.round(conf * 100) + "%",
-            icon + " " + act.charAt(0).toUpperCase() + act.slice(1),
+            (icons[act] || "") + " " + label,
         ];
     }
     """,
@@ -1433,11 +1490,22 @@ def update_live(position, particles, rssi, trail, active_tab, viz_options,
     # Activity
     if position:
         act = position.get("activity", "unknown")
-        icon = ACTIVITY_ICONS.get(act, "❓")
-        act_children = [
-            html.Span(icon, style={"fontSize": "2.5rem"}),
-            html.H5(act.title(), className="mb-0 mt-1 text-light"),
-        ]
+        luna_img = {
+            "sleeping": _pick_luna(LUNA_SLEEPS),
+            "stationary": _pick_luna(LUNA_STATIONARIES)
+        }.get(act)
+        if luna_img:
+            act_children = [
+                html.Img(src=luna_img,
+                         style={"height": "64px", "objectFit": "contain"}),
+                html.H5(act.title(), className="mb-0 mt-1 text-light"),
+            ]
+        else:
+            icon = ACTIVITY_ICONS.get(act, "❓")
+            act_children = [
+                html.Span(icon, style={"fontSize": "2.5rem"}),
+                html.H5(act.title(), className="mb-0 mt-1 text-light"),
+            ]
     else:
         act_children = [html.Span("—", className="text-muted h4")]
 
