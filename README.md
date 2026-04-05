@@ -24,9 +24,9 @@ This project combines IoT sensor networks with probabilistic ML to solve indoor 
 - BLE 5.0, supports iBeacon / Eddystone formats
 
 **Project configuration:**
-- Advertising interval: 400ms current (100–200ms recommended for real-time tracking)
-- TX Power: 0 dBm (balances range vs. floor bleed)
-- Motion-triggered: fast when moving, slow when stationary
+- SLOT 0 (iBeacon): 211.25ms advertising interval, +4 dBm TX power, -55 dBm measured power
+- SLOT 2 (TLM (Eddystone)): 10s interval for battery voltage and temperature telemetry
+- Motion trigger: OFF (continuous advertising for consistent tracking, activity manually calculated from RSSI delta)
 
 ### Anchor Nodes
 
