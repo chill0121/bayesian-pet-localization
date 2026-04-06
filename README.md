@@ -30,7 +30,7 @@ This project combines IoT sensor networks with probabilistic ML to solve indoor 
 
 ### Anchor Nodes
 
-**M5Stack AtomS3 Lite** × 8 units
+**M5Stack AtomS3 Lite** × 9 units
 - ESP32-S3, built-in 3D antenna, USB-C powered
 - Runs [ESPresense](https://espresense.com/) firmware
 - Publishes RSSI readings to MQTT topics per device
@@ -39,7 +39,7 @@ This project combines IoT sensor networks with probabilistic ML to solve indoor 
 | Floor | Anchors | Locations |
 |-------|---------|-----------|
 | 1st | 2 | Office (near dog bed), Hallway (near stairs) |
-| 2nd | 3 | Living SE, Living SW/center, Kitchen NE |
+| 2nd | 4 | Living SE, Living SW, Living center, Kitchen NE |
 | 3rd | 3 | Master bedroom, Hallway, 3F office |
 
 ### Infrastructure

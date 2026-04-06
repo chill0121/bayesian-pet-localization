@@ -652,12 +652,12 @@
         {
           "id": "2F_Living_SW",
           "position": [
-            4.64,
-            0.0
+            0.0,
+            6.83
           ],
-          "height_ft": 1.20,
+          "height_ft": 1.40,
           "mac": "E8:F6:0A:99:62:4C",
-          "_note": "AtomS3 Lite — 2F Living Room, wall L.R-L.A, 55⅝\" from west wall"
+          "_note": "AtomS3 Lite — 2F Living Room, wall L.Q-L.R, 82\" from L.R"
         },
         {
           "id": "2F_Living_Center",
@@ -678,6 +678,16 @@
           "height_ft": 3.71,
           "mac": "E8:F6:0A:98:A4:F0",
           "_note": "AtomS3 Lite — 2F Kitchen, wall L.E-L.F, 105½\" from north outer boundary"
+        },
+        {
+          "id": "2F_Living_SE",
+          "position": [
+            17.70,
+            6.22
+          ],
+          "height_ft": 4.04,
+          "mac": "D0:CF:13:0F:14:54",
+          "_note": "AtomS3 Lite — 2F Living Room, wall L.F-L.E, 2½\" north of L.E"
         }
       ],
       "stairs": [
