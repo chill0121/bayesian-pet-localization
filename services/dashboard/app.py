@@ -1045,9 +1045,9 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
     ]),
 
     # ── Summary metrics ──
-    dbc.Row(className="mb-3 g-2", children=[
-        dbc.Col(width=6, md=3, children=[
-            dbc.Card(className="bg-dark border-secondary text-center", children=[
+    dbc.Row(className="mb-3 g-2", style={"minHeight": "72px"}, children=[
+        dbc.Col(width=6, md=3, className="d-flex", children=[
+            dbc.Card(className="bg-dark border-secondary text-center w-100", children=[
                 dbc.CardBody([
                     html.Small("Location", className="text-muted d-block"),
                     html.H5("—", id="metric-location",
@@ -1055,17 +1055,21 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                 ], className="py-2"),
             ]),
         ]),
-        dbc.Col(width=6, md=3, children=[
-            dbc.Card(className="bg-dark border-secondary text-center", children=[
+        dbc.Col(width=6, md=3, className="d-flex", children=[
+            dbc.Card(className="bg-dark border-secondary text-center w-100", children=[
                 dbc.CardBody([
                     html.Small("Floor", className="text-muted d-block"),
                     html.H5("—", id="metric-floor",
-                            className="mb-0 text-light"),
+                            className="mb-0 text-light",
+                            style={"lineHeight": "1"}),
+                    html.Div(id="metric-floor-sources",
+                             style={"fontSize": "0.65rem", "lineHeight": "1",
+                                    "marginTop": "2px"}),
                 ], className="py-2"),
             ]),
         ]),
-        dbc.Col(width=6, md=3, children=[
-            dbc.Card(className="bg-dark border-secondary text-center", children=[
+        dbc.Col(width=6, md=3, className="d-flex", children=[
+            dbc.Card(className="bg-dark border-secondary text-center w-100", children=[
                 dbc.CardBody([
                     html.Small("Confidence", className="text-muted d-block"),
                     html.H5("—", id="metric-confidence",
@@ -1073,8 +1077,8 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                 ], className="py-2"),
             ]),
         ]),
-        dbc.Col(width=6, md=3, children=[
-            dbc.Card(className="bg-dark border-secondary text-center", children=[
+        dbc.Col(width=6, md=3, className="d-flex", children=[
+            dbc.Card(className="bg-dark border-secondary text-center w-100", children=[
                 dbc.CardBody([
                     html.Small("Activity", className="text-muted d-block"),
                     html.H5("—", id="metric-activity",
@@ -1355,13 +1359,37 @@ app.clientside_callback(
     """
     function(pos) {
         const icons = {"sleeping": "😴", "stationary": "🐕", "moving": "🏃", "unknown": "❓"};
-        if (!pos) return ["—", "—", "—", "—"];
+        if (!pos) return ["—", "—", "", {}, "—", "—"];
         const act = pos.activity || "unknown";
         const conf = pos.confidence || 0;
         const label = act.charAt(0).toUpperCase() + act.slice(1);
+
+        // Particle filter floor (primary)
+        const pfFloor = pos.floor || "?";
+        const floorText = "Floor " + pfFloor;
+
+        // HMM most-likely floor from floor_belief
+        let hmmFloor = "?";
+        const fb = pos.floor_belief;
+        if (fb) {
+            let bestF = null, bestP = -1;
+            for (const [f, p] of Object.entries(fb)) {
+                if (p > bestP) { bestP = p; bestF = f; }
+            }
+            if (bestF !== null) hmmFloor = bestF;
+        }
+
+        // Build source labels with color coding
+        const agree = String(pfFloor) === String(hmmFloor);
+        const color = agree ? "#2ecc71" : "#e74c3c";
+        const srcHtml = "PF: " + pfFloor + "  ·  HMM: " + hmmFloor;
+        const srcStyle = {fontSize: "0.7rem", lineHeight: "1.3", color: color};
+
         return [
             pos.location_label || "Unknown",
-            "Floor " + (pos.floor || "?"),
+            floorText,
+            srcHtml,
+            srcStyle,
             Math.round(conf * 100) + "%",
             (icons[act] || "") + " " + label,
         ];
@@ -1369,6 +1397,8 @@ app.clientside_callback(
     """,
     Output("metric-location", "children"),
     Output("metric-floor", "children"),
+    Output("metric-floor-sources", "children"),
+    Output("metric-floor-sources", "style"),
     Output("metric-confidence", "children"),
     Output("metric-activity", "children"),
     Input("store-position", "data"),
