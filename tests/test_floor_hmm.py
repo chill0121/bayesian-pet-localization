@@ -94,9 +94,11 @@ class TestHelpers:
         anchors = {
             "a1": {"x": 5.0, "y": 5.0, "floor": 2},
             "a2": {"x": 10.0, "y": 10.0, "floor": 2},
+            "a3": {"x": 5.0, "y": 5.0, "floor": 1},
+            "a4": {"x": 5.0, "y": 5.0, "floor": 3},
         }
-        # Strong RSSI from floor-2 anchors → likely on floor 2
-        rssi = {"a1": -55.0, "a2": -60.0}
+        # Strong RSSI from floor-2 anchors, weak from 1 and 3 → likely on floor 2
+        rssi = {"a1": -55.0, "a2": -60.0, "a3": -72.0, "a4": -70.0}
         ll_f2 = _emission_log_likelihood(rssi, anchors, floor_hypothesis=2)
         ll_f1 = _emission_log_likelihood(rssi, anchors, floor_hypothesis=1)
         ll_f3 = _emission_log_likelihood(rssi, anchors, floor_hypothesis=3)
@@ -221,10 +223,12 @@ class TestForwardInference:
         anchors = _load_anchors()
         hmm = FloorTransitionHMM(data, anchors)  # uniform prior
 
-        # Strong signals from floor-2 anchors
+        # Strong signals from floor-2 anchors, weaker cross-floor
         rssi = {
             "2F_Living_Center": -50.0,
             "2F_Kitchen_NE": -55.0,
+            "1F_Office": -70.0,
+            "3F_Master_Bed": -72.0,
         }
         hmm.update(rssi)
         belief = hmm.floor_belief
@@ -237,7 +241,11 @@ class TestForwardInference:
         anchors = _load_anchors()
         hmm = FloorTransitionHMM(data, anchors)
 
-        rssi = {"1F_Office": -45.0}
+        rssi = {
+            "1F_Office": -45.0,
+            "2F_Living_Center": -62.0,
+            "3F_Master_Bed": -78.0,
+        }
         hmm.update(rssi)
         belief = hmm.floor_belief
         assert belief[1] > belief[2]
@@ -259,9 +267,14 @@ class TestForwardInference:
         # Start on floor 1 (concentrated)
         hmm = FloorTransitionHMM(data, anchors, initial_floor=1)
 
-        # Repeatedly observe strong floor-2 signals
+        # Repeatedly observe strong floor-2 signals with weaker cross-floor
         for _ in range(20):
-            hmm.step({"2F_Living_Center": -50.0, "2F_Kitchen_NE": -52.0}, dt=1.0)
+            hmm.step({
+                "2F_Living_Center": -50.0,
+                "2F_Kitchen_NE": -52.0,
+                "1F_Office": -68.0,
+                "3F_Master_Bed": -70.0,
+            }, dt=1.0)
 
         belief = hmm.floor_belief
         assert belief[2] > 0.9

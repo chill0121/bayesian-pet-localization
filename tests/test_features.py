@@ -270,9 +270,15 @@ class TestCompositeFeatures:
         features = engine.update(raw, dict(raw), time.time())
         assert features["n_reporting"] == 3
 
+    def test_displacement_ft_present(self, engine):
+        features = engine.update(
+            {"living_sw": -60.0}, {"living_sw": -60.0}, time.time()
+        )
+        assert "displacement_ft" in features
+
     def test_activity_score_zero_when_still(self, engine):
         t = time.time()
-        # All constant data → var and delta both 0
+        # All constant data → var, delta, and displacement all 0
         for i in range(3):
             engine.update(
                 {"living_sw": -65.0, "living_center": -70.0},
@@ -294,14 +300,27 @@ class TestCompositeFeatures:
         features = engine.update(
             {"living_sw": -50.0}, {"living_sw": -50.0}, t + 3
         )
-        # delta_max = 15.0 → delta_component = min(15/5, 1) = 1.0
+        # raw delta_max = 15.0 → saturates to 1.0
         assert features["activity_score"] > stable_score
+
+    def test_activity_score_rises_with_displacement(self, engine):
+        t = time.time()
+        # Feed same RSSI but different positions → displacement drives score
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t,
+                       position=(0.0, 0.0, 1))
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t + 1,
+                       position=(3.0, 4.0, 1))  # 5 ft displacement
+        score = engine.features["activity_score"]
+        # displacement = 5.0, norm = 4.0 → saturates at 1.0
+        # 0.50 * 1.0 = 0.50 from displacement alone
+        assert score >= 0.5
 
     def test_activity_score_bounded_0_to_1(self, engine):
         t = time.time()
         # Feed extreme data
         for i, rssi in enumerate([-30, -100, -30, -100, -30]):
-            engine.update({"living_sw": rssi}, {"living_sw": rssi}, t + i)
+            engine.update({"living_sw": rssi}, {"living_sw": rssi}, t + i,
+                          position=(float(i * 10), 0.0, 1))
         score = engine.features["activity_score"]
         assert 0.0 <= score <= 1.0
 
@@ -493,3 +512,58 @@ class TestDynamicAnchors:
 
 def features_has_rank(features: dict, anchor_id: str) -> bool:
     return f"rank_{anchor_id}" in features
+
+
+# ---------------------------------------------------------------------------
+# Displacement-based activity
+# ---------------------------------------------------------------------------
+
+class TestDisplacement:
+    def test_displacement_zero_without_position(self, engine):
+        """No position passed → displacement stays 0."""
+        t = time.time()
+        for i in range(5):
+            engine.update({"living_sw": -60.0 - i}, {"living_sw": -60.0 - i}, t + i)
+        assert engine.features["displacement_ft"] == pytest.approx(0.0)
+
+    def test_displacement_zero_stationary(self, engine):
+        """Same position every step → displacement = 0."""
+        t = time.time()
+        for i in range(5):
+            engine.update(
+                {"living_sw": -65.0}, {"living_sw": -65.0}, t + i,
+                position=(5.0, 5.0, 1),
+            )
+        assert engine.features["displacement_ft"] == pytest.approx(0.0)
+
+    def test_displacement_pythagorean(self, engine):
+        """Displacement should be Euclidean distance from oldest to newest."""
+        t = time.time()
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t,
+                       position=(0.0, 0.0, 2))
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t + 1,
+                       position=(3.0, 4.0, 2))
+        assert engine.features["displacement_ft"] == pytest.approx(5.0)
+
+    def test_displacement_cross_floor_returns_small_positive(self, engine):
+        """Cross-floor displacement returns 1.0 ft (not 0)."""
+        t = time.time()
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t,
+                       position=(0.0, 0.0, 1))
+        engine.update({"living_sw": -65.0}, {"living_sw": -65.0}, t + 1,
+                       position=(0.0, 0.0, 2))
+        assert engine.features["displacement_ft"] == pytest.approx(1.0)
+
+    def test_displacement_uses_full_history_window(self):
+        """Displacement measures oldest-vs-newest in the position buffer."""
+        engine = FeatureEngine(anchor_positions=ANCHOR_POSITIONS, window_size=5)
+        t = time.time()
+        # Walk a path: (0,0) → (1,0) → (2,0) → ... → (5,0)
+        for i in range(6):
+            engine.update(
+                {"living_sw": -65.0 + i}, {"living_sw": -65.0 + i}, t + i,
+                position=(float(i), 0.0, 1),
+            )
+        # Position history holds last POSITION_HISTORY_SIZE entries.
+        # Oldest = (0, 0, 1), newest = (5, 0, 1) → displacement = 5.0
+        assert engine.features["displacement_ft"] == pytest.approx(5.0)
