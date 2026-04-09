@@ -72,7 +72,7 @@ KALMAN_STALE_TIMEOUT = 30.0       # seconds before anchor is considered stale
 N_PARTICLES = 500                 # number of particles
 
 # Feature engineering
-FEATURE_WINDOW_SIZE = 10          # rolling window for per-anchor variance (samples)
+FEATURE_WINDOW_SIZE = 20          # rolling window for per-anchor variance (samples)
 
 # Activity classification thresholds (applied to activity_score 0–1)
 ACTIVITY_SLEEPING_THRESHOLD = 0.15    # below → "sleeping"
@@ -437,8 +437,9 @@ def run_inference(device_id: str):
     1. Collect RSSI vector from all anchors
     2. Apply Kalman filter for per-anchor smoothing
     3. Feed smoothed RSSI into particle filter (which drives Floor HMM)
-    4. Read position estimate and determine room label
-    5. Update current_position
+    4. Feed raw + smoothed RSSI + PF position into feature engine
+    5. Read position estimate and determine room label
+    6. Update current_position
     """
     global current_position, _last_inference_time, _last_inference_mono
 
@@ -462,13 +463,7 @@ def run_inference(device_id: str):
     else:
         smoothed_rssi = rssi_vector
 
-    # --- 3. Feature engineering -----------------------------------------------
-    if feature_engine is not None:
-        computed_features = feature_engine.update(rssi_vector, smoothed_rssi, now)
-    else:
-        computed_features = {}
-
-    # --- 4. Particle filter step (includes Floor HMM) ------------------------
+    # --- 3. Particle filter step (includes Floor HMM) ------------------------
     if particle_filter is None:
         logger.warning("Particle filter not initialised — skipping inference")
         return
@@ -481,6 +476,15 @@ def run_inference(device_id: str):
 
     _last_inference_time = now
     _last_inference_mono = now_mono
+
+    # --- 4. Feature engineering (after PF so we have position) ----------------
+    if feature_engine is not None:
+        position = (estimate["x"], estimate["y"], estimate["floor"])
+        computed_features = feature_engine.update(
+            rssi_vector, smoothed_rssi, now, position=position
+        )
+    else:
+        computed_features = {}
 
     # --- 5. Room label (from particle filter position) -------------------------
     polygon_label = _label_room(estimate["x"], estimate["y"], estimate["floor"])

@@ -24,17 +24,18 @@ a logistic proximity factor.
 
 Emission (observation) model
 ----------------------------
-For each floor hypothesis *F* and each observed anchor RSSI, compute
-expected RSSI using the log-distance path-loss model (same constants as
-particle.py).  Same-floor anchors use a ``TYPICAL_SAME_FLOOR_DIST_FT``;
-cross-floor anchors add the per-floor attenuation penalty.  The product
-of per-anchor Gaussian likelihoods gives the emission probability.
+For each floor hypothesis *F*, take the **best (strongest) RSSI per
+anchor-floor** and fit the expected cross-floor attenuation pattern.
+The unknown base signal level (affected by distance + beacon occlusion)
+is analytically profiled out, so only *relative* signal differences
+between floors matter.  This makes the model robust to global signal
+depression (e.g. a sleeping pet occluding the beacon).
 
 Forward algorithm
 -----------------
 Each ``step()`` call runs:
 
-  belief[t]  =  normalise( emission  ⊙  (Tᵀ @ belief[t−1]) )
+  belief[t]  =  normalize( emission  ⊙  (Tᵀ @ belief[t−1]) )
 
 Integration
 -----------
@@ -73,9 +74,7 @@ BASE_TRANSITION_RATE = 0.01      # ~1 % per second when near stairs
 BASE_SELF_PROB = 0.97
 
 # Emission model
-TYPICAL_SAME_FLOOR_DIST_FT = 12.0   # representative in-room distance
-EMISSION_SIGMA_DBM = 8.0            # wide — accounts for positional
-                                    # uncertainty within a floor
+EMISSION_SIGMA_DBM = 8.0            # per-floor residual noise scale
 
 # Stairway proximity boost
 STAIR_PROXIMITY_FT = 6.0            # radius for proximity scaling
@@ -111,20 +110,56 @@ def _emission_log_likelihood(
 ) -> float:
     """Compute log-likelihood of RSSI observations given a floor hypothesis.
 
-    For each anchor, we estimate the expected RSSI assuming the pet
-    is on ``floor_hypothesis`` at a typical in-room distance from
-    same-floor anchors, with cross-floor attenuation for anchors on
-    other floors.
+    Uses a per-floor best-signal model that analytically profiles out the
+    unknown base signal strength (distance + occlusion), so only the
+    *relative* RSSI pattern across floors matters.
+
+    Model
+    -----
+    best_rssi[g] = base - |f - g| * FLOOR_ATTENUATION_DB + noise
+
+    where *base* is the nuisance parameter (marginalized out) and *f* is
+    the hypothesized floor.  The MLE of *base* for hypothesis *f* is::
+
+        base_hat = mean( best_rssi[g] + |f - g| * ATTEN )
+
+    The log-likelihood is then the sum of squared residuals under this
+    best-fit base, scaled by ``EMISSION_SIGMA_DBM``.
     """
-    ll = 0.0
+    # 1. Best (strongest) RSSI per anchor-floor
+    best_by_floor: dict[int, float] = {}
     for anchor_id, observed_rssi in rssi_readings.items():
         if anchor_id not in anchor_positions:
             continue
-        anchor_floor = anchor_positions[anchor_id]["floor"]
-        floor_diff = abs(floor_hypothesis - anchor_floor)
-        expected = _expected_rssi(TYPICAL_SAME_FLOOR_DIST_FT, floor_diff)
-        diff = observed_rssi - expected
-        ll += -0.5 * (diff / EMISSION_SIGMA_DBM) ** 2
+        a_floor = anchor_positions[anchor_id]["floor"]
+        if a_floor not in best_by_floor or observed_rssi > best_by_floor[a_floor]:
+            best_by_floor[a_floor] = observed_rssi
+
+    if not best_by_floor:
+        return 0.0
+
+    n_floors = len(best_by_floor)
+
+    # With only one floor of data, no relative pattern exists — return 0
+    # (uninformative) and let the transition model carry the belief.
+    if n_floors < 2:
+        return 0.0
+
+    # 2. Profile out the unknown base signal
+    adjusted = [
+        best_by_floor[g] + abs(floor_hypothesis - g) * FLOOR_ATTENUATION_DB
+        for g in best_by_floor
+    ]
+    base_hat = sum(adjusted) / n_floors
+
+    # 3. Sum of squared residuals
+    ll = 0.0
+    for g, best_rssi in best_by_floor.items():
+        floor_diff = abs(floor_hypothesis - g)
+        expected = base_hat - floor_diff * FLOOR_ATTENUATION_DB
+        residual = best_rssi - expected
+        ll += -0.5 * (residual / EMISSION_SIGMA_DBM) ** 2
+
     return ll
 
 
@@ -285,7 +320,7 @@ class FloorTransitionHMM:
                 T[i, j] = min(p, MAX_TRANSITION_PROB_CAP)
 
             T[i, i] = 1.0 - T[i].sum()
-            # Guard: if numerical error makes self < 0, renormalise
+            # Guard: if numerical error makes self < 0, renormalize
             if T[i, i] < 0:
                 T[i] /= T[i].sum()
 
@@ -296,12 +331,12 @@ class FloorTransitionHMM:
     # ------------------------------------------------------------------
 
     def _emission_probs(self, rssi_readings: dict[str, float]) -> np.ndarray:
-        """Compute normalised emission probabilities for each floor.
+        """Compute normalized emission probabilities for each floor.
 
         Returns
         -------
         np.ndarray, shape (n_floors,)
-            Normalised emission likelihoods.
+            normalized emission likelihoods.
         """
         log_liks = np.array([
             _emission_log_likelihood(rssi_readings, self._anchors, f)
@@ -334,7 +369,7 @@ class FloorTransitionHMM:
         T = self._transition_matrix(dt, stair_proximity)
         # belief_new = T^T @ belief  (column convention)
         self._belief = T.T @ self._belief
-        # Normalise (guard against numerical drift)
+        # normalize (guard against numerical drift)
         total = self._belief.sum()
         if total > 0:
             self._belief /= total

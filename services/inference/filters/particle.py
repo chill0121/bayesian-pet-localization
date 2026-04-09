@@ -68,6 +68,9 @@ STAIR_PROXIMITY_FT = 4.0         # how close a particle must be to a stair entry
 FLOOR_TRANSITION_PROB = 0.02     # base probability of changing floor per step
 FLOOR_TRANSITION_RATE_HMM = 0.8  # per-second rate when HMM belief indicates
                                  # a different floor (scaled by dt × proximity)
+FLOOR_TRANSITION_COOLDOWN = 5.0  # seconds a particle must stay on a floor
+                                 # before it can transition again (prevents
+                                 # rapid 1→2→3 cascading through staircase)
 
 # Floor teleport: when the HMM strongly disagrees with the particle
 # majority floor for several consecutive seconds, reinitialize a
@@ -229,6 +232,10 @@ class ParticleFilter:
         self._y = np.zeros(self.n)
         self._floor = np.ones(self.n, dtype=int)
         self._weights = np.full(self.n, 1.0 / self.n)
+
+        # Per-particle floor-transition cooldown: time remaining (seconds)
+        # before the particle is allowed to change floors again.
+        self._transition_cooldown = np.zeros(self.n)
 
         # Last RSSI readings (stored for drift computation in predict)
         self._last_rssi: dict[str, float] = {}
@@ -435,9 +442,22 @@ class ParticleFilter:
         for the destination floor is used as the transition probability
         (scaled by dt and proximity).  Otherwise falls back to the fixed
         ``FLOOR_TRANSITION_PROB`` rate.
+
+        Guards:
+        * Per-particle **cooldown**: after a floor transition, the particle
+          cannot transition again for ``FLOOR_TRANSITION_COOLDOWN`` seconds.
+          This prevents rapid cascading (e.g. 1→2→3 within a few steps).
+        * **Same-step guard**: a particle that transitions in this call is
+          excluded from further transitions in the same call (prevents
+          instant bounce-back through a shared stairway entry).
         """
         if not self._stairways:
             return
+
+        # Tick down cooldowns
+        self._transition_cooldown = np.maximum(
+            self._transition_cooldown - dt, 0.0
+        )
 
         # HMM belief (if available) for destination-floor weighting
         hmm_belief = (
@@ -446,18 +466,26 @@ class ParticleFilter:
 
         base_p = min(FLOOR_TRANSITION_PROB * dt, 0.1)
 
+        # Track particles that already changed floor this step
+        already_transitioned = np.zeros(self.n, dtype=bool)
+
         for stair in self._stairways:
             from_floor = stair["from_floor"]
             to_floor = stair["to_floor"]
             sx, sy = stair["entry_x"], stair["entry_y"]
 
-            # Find particles on the departure floor near the stairway entry
-            on_floor = self._floor == from_floor
-            if not np.any(on_floor):
+            # Find particles on the departure floor near the stairway entry,
+            # excluding those on cooldown or already transitioned this step.
+            eligible = (
+                (self._floor == from_floor)
+                & (self._transition_cooldown == 0.0)
+                & ~already_transitioned
+            )
+            if not np.any(eligible):
                 continue
 
-            dx = self._x[on_floor] - sx
-            dy = self._y[on_floor] - sy
+            dx = self._x[eligible] - sx
+            dy = self._y[eligible] - sy
             dists = np.sqrt(dx ** 2 + dy ** 2)
             close = dists < STAIR_PROXIMITY_FT
 
@@ -484,7 +512,7 @@ class ParticleFilter:
             p_per_particle = p_transition * proximity_scale
 
             # Indices into full arrays
-            full_indices = np.where(on_floor)[0][close]
+            full_indices = np.where(eligible)[0][close]
             do_transition = self._rng.random(len(full_indices)) < p_per_particle
 
             for idx in full_indices[do_transition]:
@@ -494,6 +522,8 @@ class ParticleFilter:
                     self._floor[idx] = to_floor
                     self._x[idx] = dest_entry[0]
                     self._y[idx] = dest_entry[1]
+                    self._transition_cooldown[idx] = FLOOR_TRANSITION_COOLDOWN
+                    already_transitioned[idx] = True
 
     def _find_stair_entry(
         self, on_floor: int, coming_from: int
@@ -684,6 +714,10 @@ class ParticleFilter:
         ``TELEPORT_FRACTION`` of particles uniformly on walkable cells of
         the target floor.  This recovers from situations where particles
         are trapped on the wrong floor or stuck behind walls.
+
+        The target floor must be adjacent to the particle majority floor —
+        teleporting directly across non-adjacent floors (e.g. 1→3) is not
+        allowed.
         """
         if self._floor_hmm is None:
             return
@@ -698,7 +732,12 @@ class ParticleFilter:
 
         self._cumulative_time += dt
 
-        if hmm_best != particle_best and hmm_conf >= TELEPORT_BELIEF_THRESHOLD:
+        # Only allow teleport to adjacent floors
+        adjacent = self._adjacent_floors()
+
+        if (hmm_best != particle_best
+                and hmm_conf >= TELEPORT_BELIEF_THRESHOLD
+                and hmm_best in adjacent.get(particle_best, set())):
             if self._teleport_disagreement_start is None:
                 self._teleport_disagreement_start = self._cumulative_time
             elif (self._cumulative_time - self._teleport_disagreement_start
@@ -707,8 +746,18 @@ class ParticleFilter:
                 self._do_teleport(hmm_best)
                 self._teleport_disagreement_start = None
         else:
-            # Agreement (or weak disagreement) — reset holdoff
+            # Agreement (or weak disagreement or non-adjacent) — reset holdoff
             self._teleport_disagreement_start = None
+
+    def _adjacent_floors(self) -> dict[int, set[int]]:
+        """Build floor adjacency from stairway definitions."""
+        adj: dict[int, set[int]] = {}
+        for stair in self._stairways:
+            f = stair["from_floor"]
+            t = stair["to_floor"]
+            adj.setdefault(f, set()).add(t)
+            adj.setdefault(t, set()).add(f)
+        return adj
 
     def _do_teleport(self, target_floor: int) -> None:
         """Reinitialise a fraction of lowest-weight particles on *target_floor*."""

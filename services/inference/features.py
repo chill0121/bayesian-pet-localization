@@ -6,7 +6,7 @@ downstream ML models (Random Forest room classifier, activity inference).
 
 Feature groups
 --------------
-1. **Delta RSSI** — per-anchor change between consecutive smoothed readings,
+1. **Delta RSSI** — per-anchor change between consecutive *raw* readings,
    plus aggregate statistics (mean, max absolute delta).
 2. **Anchor Rankings** — ordinal rank of each anchor by signal strength,
    rank-change count, strongest anchor ID, RSSI gap between top two.
@@ -16,15 +16,17 @@ Feature groups
 4. **Cross-Floor Attenuation** — per-floor anchor counts and mean RSSI, best-
    floor indicator, same-vs-cross floor signal ratio.
 5. **Composite / Activity** — number of reporting anchors and a 0–1 activity
-   score derived from variance and delta features.
+   score derived from variance, raw-RSSI delta, and position displacement.
 
 Usage::
 
-    engine = FeatureEngine(anchor_positions=anchor_coords, window_size=30)
+    engine = FeatureEngine(anchor_positions=anchor_coords, window_size=20)
     # Each inference cycle:
-    features = engine.update(raw_rssi, smoothed_rssi, timestamp)
+    features = engine.update(raw_rssi, smoothed_rssi, timestamp,
+                             position=(x, y, floor))
 """
 
+import math
 from collections import defaultdict, deque
 from typing import Optional
 
@@ -32,13 +34,20 @@ from typing import Optional
 # Activity-score tuning constants
 # ---------------------------------------------------------------------------
 
-# Variance normalisation ceiling: var_mean at this value maps to 1.0
-VARIANCE_NORMALISATION_MAX = 20.0   # dBm²
-# Delta normalisation ceiling: delta_max at this value maps to 1.0
-DELTA_NORMALISATION_MAX = 5.0       # dBm
+# Variance normalization ceiling: var_mean at this value maps to 1.0
+VARIANCE_normalization_MAX = 8.0    # dBm²  (was 20; lowered to match real BLE dynamics)
+# Delta normalization ceiling: delta_max at this value maps to 1.0
+DELTA_normalization_MAX = 3.0       # dBm   (was 5; raw deltas rarely exceed 3 dBm)
+# Position displacement normalization ceiling (feet over window)
+DISPLACEMENT_normalization_MAX = 4.0  # ft   (~walking speed over a few seconds)
+
 # Blend weights for the composite activity score (must sum to 1.0)
-ACTIVITY_VAR_WEIGHT = 0.6
-ACTIVITY_DELTA_WEIGHT = 0.4
+ACTIVITY_VAR_WEIGHT = 0.25
+ACTIVITY_DELTA_WEIGHT = 0.25
+ACTIVITY_DISPLACEMENT_WEIGHT = 0.50
+
+# Position history size for displacement computation
+POSITION_HISTORY_SIZE = 10
 
 
 class FeatureEngine:
@@ -79,8 +88,14 @@ class FeatureEngine:
         self._last_raw: dict[str, float] = {}
 
         # Previous step state (for delta / ranking change computation)
+        self._prev_raw: dict[str, float] = {}
         self._prev_smoothed: dict[str, float] = {}
         self._prev_rankings: list[str] = []
+
+        # Position history for displacement-based activity detection
+        self._position_history: deque[tuple[float, float, int]] = deque(
+            maxlen=POSITION_HISTORY_SIZE
+        )
 
         # Latest computed features
         self._features: dict[str, float | int | str] = {}
@@ -94,6 +109,7 @@ class FeatureEngine:
         raw_rssi: dict[str, float],
         smoothed_rssi: dict[str, float],
         timestamp: float,
+        position: Optional[tuple[float, float, int]] = None,
     ) -> dict:
         """Ingest new RSSI data and compute all feature groups.
 
@@ -105,6 +121,9 @@ class FeatureEngine:
             anchor_id → Kalman-smoothed RSSI (dBm).
         timestamp : float
             Current time (seconds, e.g. ``time.time()``).
+        position : tuple[float, float, int] | None
+            Current particle filter estimate ``(x, y, floor)``.
+            Used for displacement-based activity scoring.
 
         Returns
         -------
@@ -121,14 +140,19 @@ class FeatureEngine:
                 self._history[anchor_id].append(rssi)
                 self._last_raw[anchor_id] = rssi
 
+        # Track position for displacement computation
+        if position is not None:
+            self._position_history.append(position)
+
         features: dict = {}
-        features.update(self._delta_features(smoothed_rssi))
+        features.update(self._delta_features(raw_rssi))
         features.update(self._ranking_features(smoothed_rssi))
         features.update(self._variance_features(smoothed_rssi))
         features.update(self._cross_floor_features(smoothed_rssi))
         features.update(self._composite_features(smoothed_rssi, features))
 
         # Advance state for next step
+        self._prev_raw = dict(raw_rssi)
         self._prev_smoothed = dict(smoothed_rssi)
         self._features = features
         return features
@@ -142,13 +166,13 @@ class FeatureEngine:
     # 1. Delta RSSI
     # ------------------------------------------------------------------
 
-    def _delta_features(self, smoothed: dict[str, float]) -> dict:
-        """Per-anchor RSSI delta from previous step + aggregates."""
+    def _delta_features(self, raw: dict[str, float]) -> dict:
+        """Per-anchor RSSI delta from previous raw reading + aggregates."""
         deltas: dict[str, float] = {}
         abs_deltas: list[float] = []
 
-        for anchor_id, rssi in smoothed.items():
-            prev = self._prev_smoothed.get(anchor_id)
+        for anchor_id, rssi in raw.items():
+            prev = self._prev_raw.get(anchor_id)
             if prev is not None:
                 d = rssi - prev
                 deltas[f"delta_rssi_{anchor_id}"] = round(d, 3)
@@ -290,23 +314,59 @@ class FeatureEngine:
     def _composite_features(
         self, smoothed: dict[str, float], computed: dict
     ) -> dict:
-        """Aggregate features: reporting anchor count and activity score."""
+        """Aggregate features: reporting anchor count and activity score.
+
+        The activity score blends three signals:
+        * **RSSI variance** — rolling raw-RSSI variance across anchors.
+        * **RSSI delta** — max absolute raw-RSSI change between steps.
+        * **Position displacement** — Euclidean distance between the
+          oldest and newest position in the history buffer.  This is
+          the most direct measure of movement and is unaffected by
+          Kalman smoothing or RSSI noise floors.
+        """
         n_reporting = len(smoothed)
 
         # Activity score: 0 (sleeping) → 1 (moving)
-        # Blend of rolling variance and delta magnitude.
         var_mean = computed.get("var_mean", 0.0)
         delta_max = computed.get("delta_max", 0.0)
 
-        # Normalize each component to [0, 1] based on tuning ceilings, then blend
-        var_component = min(var_mean / VARIANCE_NORMALISATION_MAX, 1.0)
-        delta_component = min(delta_max / DELTA_NORMALISATION_MAX, 1.0)
-        # Weighted blend (variance is more reliable for stationary vs moving, so higher weight)
+        # Normalize RSSI components to [0, 1]
+        var_component = min(var_mean / VARIANCE_normalization_MAX, 1.0)
+        delta_component = min(delta_max / DELTA_normalization_MAX, 1.0)
+
+        # Displacement component: distance from oldest to newest position
+        displacement_ft = self._compute_displacement()
+        disp_component = min(
+            displacement_ft / DISPLACEMENT_normalization_MAX, 1.0
+        )
+
+        # Weighted blend
         activity_score = round(
-            ACTIVITY_VAR_WEIGHT * var_component + ACTIVITY_DELTA_WEIGHT * delta_component, 3
+            ACTIVITY_VAR_WEIGHT * var_component
+            + ACTIVITY_DELTA_WEIGHT * delta_component
+            + ACTIVITY_DISPLACEMENT_WEIGHT * disp_component,
+            3,
         )
 
         return {
             "n_reporting": n_reporting,
             "activity_score": activity_score,
+            "displacement_ft": round(displacement_ft, 3),
         }
+
+    def _compute_displacement(self) -> float:
+        """Euclidean displacement between oldest and newest position.
+
+        Returns 0.0 if fewer than 2 positions are stored, or if the
+        positions are on different floors (floor change ≠ walking
+        distance — the particle filter already handles that).
+        """
+        if len(self._position_history) < 2:
+            return 0.0
+        x0, y0, f0 = self._position_history[0]
+        x1, y1, f1 = self._position_history[-1]
+        if f0 != f1:
+            # Cross-floor: can't compute meaningful 2D displacement.
+            # Return a small positive value to indicate *some* movement.
+            return 1.0
+        return math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
