@@ -152,6 +152,13 @@
               "wall_axis": "x",
               "width": 2.93
             }
+          ],
+          "poi": [
+            {
+              "name": "entrance_rug",
+              "position": [5.63, 23.12],
+              "_note": "67.5\" E of west wall H.F-H.E, 11\" S of north wall H.F-H.G"
+            }
           ]
         },
         {
@@ -200,6 +207,18 @@
                 180.0,
                 270.0
               ]
+            }
+          ],
+          "poi": [
+            {
+              "name": "under_desk",
+              "position": [1.0, 4.85],
+              "_note": "12\" E of west wall O.B-O.C, 77.5\" S of north wall O.C-O.D"
+            },
+            {
+              "name": "dog_bed",
+              "position": [3.54, 10.60],
+              "_note": "42.5\" E of west wall O.B-O.C, 8.5\" S of north wall O.C-O.D"
             }
           ]
         },
@@ -534,20 +553,29 @@
           ],
           "poi": [
             {
-              "name": "couch_area",
-              "position": [
-                10.0,
-                12.0
-              ],
-              "_note": "placeholder"
+              "name": "armchair",
+              "position": [12.96, 6.65],
+              "_note": "155.5\" E of west wall L.Q-L.R, 55\" N of south wall L.B-L.C"
+            },
+            {
+              "name": "south_couch",
+              "position": [7.79, 8.29],
+              "_note": "93.5\" E of west wall L.Q-L.R, 99.5\" N of south wall L.R-L.A"
+            },
+            {
+              "name": "north_couch",
+              "position": [7.85, 14.10],
+              "_note": "52.5\" E of west wall L.M-L.N, 169.25\" N of south wall L.R-L.A"
             },
             {
               "name": "water_bowl",
-              "position": [
-                14.0,
-                26.0
-              ],
-              "_note": "placeholder"
+              "position": [4.64, 20.51],
+              "_note": "14\" E of west wall L.M-L.N, 6\" S of north end L.M"
+            },
+            {
+              "name": "kitchen_spot",
+              "position": [16.97, 26.02],
+              "_note": "8.75\" W of east wall L.F-L.E, 22\" S of north wall L.G-L.F"
             }
           ]
         },
@@ -639,11 +667,8 @@
           "poi": [
             {
               "name": "rug",
-              "position": [
-                2.37,
-                26.86
-              ],
-              "_note": "placeholder"
+              "position": [0.92, 27.43],
+              "_note": "11\" E of west wall P.A-P.D, 23.5\" S of north wall P.A-P.B"
             }
           ]
         }
@@ -1049,6 +1074,18 @@
               "height_ft": 8.0,
               "_note": "Closet along south wall"
             }
+          ],
+          "poi": [
+            {
+              "name": "dog_bed",
+              "position": [8.09, 25.22],
+              "_note": "10.25\" E of west wall W.E-W.F, 49.75\" S of north wall W.F-W.A"
+            },
+            {
+              "name": "couch",
+              "position": [15.70, 28.31],
+              "_note": "24\" W of east wall W.A-W.B, 12.75\" S of north wall W.F-W.A"
+            }
           ]
         },
         {
@@ -1142,6 +1179,23 @@
               ],
               "height_ft": 8.0,
               "_note": "Closet along north wall"
+            }
+          ],
+          "poi": [
+            {
+              "name": "dog_bed",
+              "position": [10.54, 13.09],
+              "_note": "44\" E of west wall B.A-B.D, 12\" S of north wall B.A-B.B"
+            },
+            {
+              "name": "on_master_bed",
+              "position": [14.77, 8.36],
+              "_note": "94.75\" E of west wall B.A-B.D, 75.5\" N of south wall B.C-B.D"
+            },
+            {
+              "name": "under_master_bed",
+              "position": [11.29, 8.36],
+              "_note": "53\" E of west wall B.A-B.D, 75.5\" N of south wall B.C-B.D"
             }
           ]
         },
