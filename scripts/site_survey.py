@@ -298,6 +298,7 @@ def generate_grid_points(
                         "room": parent_room,
                         "zone": zone,
                         "type": "poi",
+                        "poi_name": poi["name"],
                     })
                     seen.add(key)
 
@@ -311,7 +312,8 @@ def generate_grid_points(
 class RSSICollector:
     """Collects RSSI readings from MQTT during a dwell period."""
 
-    def __init__(self, host: str, port: int, beacon_id: str):
+    def __init__(self, host: str, port: int, beacon_id: str,
+                 canonical_anchor_ids: list[str] | None = None):
         self.host = host
         self.port = port
         self.beacon_id = beacon_id
@@ -320,6 +322,11 @@ class RSSICollector:
         # Per-anchor list of raw RSSI readings during current dwell
         self._readings: dict[str, list[float]] = defaultdict(list)
         self._collecting = False
+        # Map lowercase MQTT anchor IDs → canonical layout.json casing
+        self._id_map: dict[str, str] = {}
+        if canonical_anchor_ids:
+            for aid in canonical_anchor_ids:
+                self._id_map[aid.lower()] = aid
 
     def connect(self) -> bool:
         """Connect to MQTT broker. Returns True on success."""
@@ -390,6 +397,8 @@ class RSSICollector:
             if len(parts) < 4:
                 return
             anchor_id = parts[3]
+            # Normalize to canonical casing from layout.json
+            anchor_id = self._id_map.get(anchor_id.lower(), anchor_id)
             payload = json.loads(msg.payload.decode())
             rssi = payload.get("rssi")
             if rssi is not None:
@@ -717,16 +726,17 @@ def run_survey(
 
     for seq, idx in enumerate(remaining):
         point = points[idx]
-        point_num = seq + 1 + len(completed)
+        point_num = seq + 1
 
         # Show next point prompt
         zone_info = point['zone']
         if point['room'] != point['zone']:
             zone_info = f"{point['zone']} (in {point['room']})"
+        poi_label = f"  {point['poi_name']}" if point.get('poi_name') else ""
         print(f"{'─' * 60}")
-        print(f"  Point {point_num}/{total}  "
+        print(f"  Point {point_num}/{len(remaining)}  "
               f"({point['x']:.1f}, {point['y']:.1f})  [{zone_info}]  "
-              f"({point['type']})")
+              f"({point['type']}){poi_label}")
         print(f"  Place beacon on stand → ", end="")
 
         # Wait for user input
@@ -828,9 +838,10 @@ def run_survey(
                 zone_info = poi["zone"]
                 if poi["room"] != poi["zone"]:
                     zone_info = f"{poi['zone']} (in {poi['room']})"
+                poi_label = poi.get('poi_name', '')
                 print(f"{'─' * 60}")
                 print(f"  Occluded {seq}/{len(poi_points)}  "
-                      f"({poi['x']}, {poi['y']})  [{zone_info}]")
+                      f"({poi['x']}, {poi['y']})  [{zone_info}]  {poi_label}")
                 print(f"  Place beacon face-down → ", end="")
                 print("ENTER=start | s=skip | q=quit: ", end="")
                 sys.stdout.flush()
@@ -1152,7 +1163,10 @@ Examples:
         survey_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
         # Connect to MQTT
-        collector = RSSICollector(args.host, args.port, args.beacon_id)
+        collector = RSSICollector(
+            args.host, args.port, args.beacon_id,
+            canonical_anchor_ids=list(anchors.keys()),
+        )
         print(f"\n  Connecting to MQTT broker at {args.host}:{args.port}...")
         if not collector.connect():
             return
