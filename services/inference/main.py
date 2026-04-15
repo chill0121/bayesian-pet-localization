@@ -65,7 +65,7 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "pet_tracking")
 
 # Kalman filter bank
 KALMAN_PROCESS_NOISE = 0.5        # process noise variance (trust measurements)
-KALMAN_MEASUREMENT_NOISE = 1.0    # measurement noise variance (~0.8 dBm from data)
+KALMAN_MEASUREMENT_NOISE = 0.6    # measurement noise variance — survey median std=0.66 dBm
 KALMAN_STALE_TIMEOUT = 30.0       # seconds before anchor is considered stale
 
 # Particle filter
@@ -115,6 +115,14 @@ room_polygons: dict[int, list[tuple[str, list]]] = {}
 # Per-floor, per-room gate definitions for zone sub-classification
 # {floor: {room_name: [{"axis": "y", "coord": 20.73, "above": "kitchen", "below": "living_room"}, ...]}}
 room_gates: dict[int, dict[str, list[dict]]] = {}
+
+# Reverse mapping: gate-derived zone name → parent room name
+# e.g. {"living_room": "living_kitchen", "kitchen": "living_kitchen"}
+_gate_to_parent: dict[str, str] = {}
+
+# POI-based zone definitions for zone-likelihood reweighting
+# {room_name: {zone_label: {"x": float, "y": float, "floor": int, "radius_ft": float}}}
+poi_zones: dict[str, dict[str, dict]] = {}
 
 # Timing: last inference timestamp for computing dt
 _last_inference_time: Optional[float] = None
@@ -236,6 +244,10 @@ position_history: deque = deque(maxlen=POSITION_HISTORY_MAXLEN)
 
 # RSSI history (ring buffer for recent readings)
 rssi_history: deque = deque(maxlen=RSSI_HISTORY_MAXLEN)
+
+# Zone probability history (ring buffer for classifier visualization)
+ZONE_PROB_HISTORY_MAXLEN = 120
+zone_prob_history: deque = deque(maxlen=ZONE_PROB_HISTORY_MAXLEN)
 
 # Current position estimate
 current_position = {
@@ -513,11 +525,12 @@ def run_inference(device_id: str):
 
     if zone_classifier is not None and zone_classifier.is_trained:
         try:
+            parent_room = _gate_to_parent.get(polygon_label, polygon_label)
             zone_label, zone_confidence, zone_probabilities = (
                 zone_classifier.predict_for_room(
                     computed_features,
                     smoothed_rssi=smoothed_rssi,
-                    room=polygon_label,
+                    room=parent_room,
                 )
             )
         except Exception as e:
@@ -529,6 +542,19 @@ def run_inference(device_id: str):
         location_label = zone_label
     else:
         location_label = polygon_label
+
+    # --- 9b. Zone-likelihood particle reweighting -----------------------------
+    # When the classifier predicts a POI sub-zone, reweight particles so that
+    # those near the POI center gain probability mass.  This pulls the
+    # position estimate toward the predicted POI without violating wall
+    # constraints (particles still respect room boundaries).
+    reweight_stats = {"particles_in_poi": 0, "particles_reweighted": 0,
+                      "max_weight_shift": 1.0}
+    room_pois = poi_zones.get(_gate_to_parent.get(polygon_label, polygon_label))
+    if room_pois and zone_probabilities and particle_filter is not None:
+        estimate, reweight_stats = particle_filter.apply_zone_likelihood(
+            room_pois, zone_probabilities, polygon_label,
+        )
 
     # --- 10. Update position state --------------------------------------------
     position_update = {
@@ -548,8 +574,19 @@ def run_inference(device_id: str):
         "zone_label": zone_label,
         "zone_confidence": round(zone_confidence, 3),
         "zone_probabilities": zone_probabilities,
+        "reweight_stats": reweight_stats,
     }
     current_position.update(position_update)
+
+    # Append to zone probability history ring buffer (lightweight)
+    if zone_probabilities:
+        zone_prob_history.append({
+            "timestamp": position_update["timestamp"],
+            "zone_label": zone_label,
+            "zone_confidence": round(zone_confidence, 3),
+            "probabilities": zone_probabilities,
+            "reweight_stats": reweight_stats,
+        })
 
     # Store in position history (in-memory ring buffer)
     position_history.append({**current_position})
@@ -629,6 +666,11 @@ class PositionResponse(BaseModel):
     n_eff: Optional[float] = None
     particle_count: Optional[int] = None
     floor_belief: Optional[dict] = None
+    polygon_label: Optional[str] = None
+    zone_label: Optional[str] = None
+    zone_confidence: Optional[float] = None
+    zone_probabilities: Optional[dict] = None
+    reweight_stats: Optional[dict] = None
 
 
 class HealthResponse(BaseModel):
@@ -694,6 +736,12 @@ async def get_position_history(limit: int = 100, source: str = "memory"):
                     row[k] = v.isoformat()
         return rows
     return list(position_history)[-limit:]
+
+
+@app.get("/zone/history")
+async def get_zone_history(limit: int = 100):
+    """Get recent zone classifier probability history for visualization."""
+    return list(zone_prob_history)[-limit:]
 
 
 @app.get("/devices")
@@ -787,6 +835,8 @@ async def get_stats():
         stats["pipeline"]["zone_to_room"] = zone_classifier.zone_to_room
     else:
         stats["pipeline"]["zone_classifier_active"] = False
+    if poi_zones:
+        stats["pipeline"]["poi_zones"] = poi_zones
     return stats
 
 
@@ -851,11 +901,36 @@ async def startup_event():
                     "below": gate["between"][1],
                 })
             room_gates.setdefault(floor_num, {})[room["name"]] = parsed_gates
+            for gate in parsed_gates:
+                _gate_to_parent[gate["above"]] = room["name"]
+                _gate_to_parent[gate["below"]] = room["name"]
             logger.info(
                 f"Floor {floor_num} room '{room['name']}' has "
                 f"{len(parsed_gates)} zone gate(s): "
                 f"{[g['above'] + '/' + g['below'] for g in parsed_gates]}"
             )
+
+    # Build POI zone lookup for zone-likelihood reweighting
+    poi_radius_ft = floorplan_data.get("poi_radius_ft", 3.0)
+    for floor_data in floorplan_data.get("floors", []):
+        floor_num = floor_data["floor"]
+        for room in floor_data.get("rooms", []):
+            room_name = room["name"]
+            for p in room.get("poi", []):
+                pos = p.get("position", [p.get("x", 0), p.get("y", 0)])
+                zone_label = f"{room_name}_{p['name']}"
+                poi_zones.setdefault(room_name, {})[zone_label] = {
+                    "x": pos[0],
+                    "y": pos[1],
+                    "floor": floor_num,
+                    "radius_ft": poi_radius_ft,
+                }
+    if poi_zones:
+        n_pois = sum(len(v) for v in poi_zones.values())
+        logger.info(
+            "Loaded %d POI zones across %d rooms (radius=%.1f ft)",
+            n_pois, len(poi_zones), poi_radius_ft,
+        )
 
     # --- Inference pipeline initialisation ---
     # Kalman filter bank (per-anchor RSSI smoothing)

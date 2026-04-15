@@ -45,6 +45,7 @@ from .constants import (
     MIN_DISTANCE_FT,
     WALL_ATTENUATION_DB,
     FLOOR_ELEVATION_FT,
+    ZONE_LIKELIHOOD_STRENGTH,
 )
 from .floor_hmm import FloorTransitionHMM
 
@@ -700,6 +701,128 @@ class ParticleFilter:
         self.update(rssi_readings)
         self.resample_if_needed()
         return self.estimate
+
+    # ------------------------------------------------------------------
+    # Zone-likelihood reweighting
+    # ------------------------------------------------------------------
+
+    def apply_zone_likelihood(
+        self,
+        poi_zones: dict[str, dict],
+        zone_probs: dict[str, float],
+        room_label: str,
+    ) -> dict:
+        """Reweight particles using zone-classifier probabilities.
+
+        After the RSSI-based update cycle, the zone classifier provides
+        posterior probabilities for sub-zones (POI areas) within the
+        current room.  Particles near a POI zone receive a likelihood
+        multiplier proportional to that zone's probability; particles
+        not in any POI zone receive the room-level probability.
+
+        Probabilities are raised to ``ZONE_LIKELIHOOD_STRENGTH`` to
+        dampen the effect and prevent particle collapse.
+
+        Parameters
+        ----------
+        poi_zones : dict[str, dict]
+            POI zone definitions for the current room.
+            ``{zone_label: {"x": float, "y": float,
+            "floor": int, "radius_ft": float}}``.
+        zone_probs : dict[str, float]
+            Zone-classifier probabilities scoped to the current room
+            (output of ``predict_for_room``).  Keys include both POI
+            zone labels and the room-level fallback label.
+        room_label : str
+            The room-level label (e.g. ``"office"``).  Particles not
+            in any POI zone use this key's probability as their weight.
+
+        Returns
+        -------
+        dict
+            Updated position estimate.
+        """
+        if (not self._initialised or not poi_zones or not zone_probs
+                or ZONE_LIKELIHOOD_STRENGTH <= 0):
+            return self.estimate, {"particles_in_poi": 0,
+                                   "particles_reweighted": 0,
+                                   "max_weight_shift": 1.0}
+
+        # Determine which floor(s) the POI zones span
+        poi_floors = {poi["floor"] for poi in poi_zones.values()}
+
+        # Map each particle to its POI zone (if any)
+        particle_zone: list[str | None] = [None] * self.n
+        for zone_label, poi in poi_zones.items():
+            prob = zone_probs.get(zone_label, 0.0)
+            if prob <= 0:
+                continue
+            poi_floor = poi["floor"]
+            poi_x, poi_y = poi["x"], poi["y"]
+            radius = poi["radius_ft"]
+
+            mask = self._floor == poi_floor
+            if not np.any(mask):
+                continue
+
+            dx = self._x[mask] - poi_x
+            dy = self._y[mask] - poi_y
+            dist = np.sqrt(dx ** 2 + dy ** 2)
+            in_zone = dist <= radius
+
+            if not np.any(in_zone):
+                continue
+
+            indices = np.where(mask)[0][in_zone]
+            for idx in indices:
+                # If overlapping zones, keep the closest
+                if particle_zone[idx] is None:
+                    particle_zone[idx] = zone_label
+                else:
+                    # Already assigned — keep previous (first-match)
+                    pass
+
+        n_in_poi = sum(1 for z in particle_zone if z is not None)
+
+        # If no particles fall in any POI zone, skip reweighting
+        if n_in_poi == 0:
+            return self.estimate, {"particles_in_poi": 0,
+                                   "particles_reweighted": 0,
+                                   "max_weight_shift": 1.0}
+
+        # Room-level fallback probability (for particles outside all POI zones)
+        room_prob = max(zone_probs.get(room_label, 0.0), 0.01)
+        strength = ZONE_LIKELIHOOD_STRENGTH
+
+        multipliers = np.ones(self.n)
+        for i in range(self.n):
+            if int(self._floor[i]) not in poi_floors:
+                continue  # Leave cross-floor particles unchanged
+
+            z = particle_zone[i]
+            if z is not None:
+                raw_prob = max(zone_probs.get(z, 0.01), 0.01)
+            else:
+                raw_prob = room_prob
+
+            multipliers[i] = raw_prob ** strength
+
+        self._weights *= multipliers
+        total = self._weights.sum()
+        if total > 0:
+            self._weights /= total
+        else:
+            self._weights[:] = 1.0 / self.n
+
+        n_reweighted = sum(1 for i in range(self.n)
+                          if particle_zone[i] is not None)
+        max_shift = float(multipliers.max() / max(multipliers.min(), 1e-12))
+
+        return self.estimate, {
+            "particles_in_poi": n_in_poi,
+            "particles_reweighted": n_reweighted,
+            "max_weight_shift": round(max_shift, 2),
+        }
 
     # ------------------------------------------------------------------
     # Floor teleport

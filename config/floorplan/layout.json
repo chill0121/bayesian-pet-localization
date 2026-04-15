@@ -1,4 +1,5 @@
 {
+  "poi_radius_ft": 2.5,
   "_schema_notes": {
     "version": "3.0",
     "units": "feet",
