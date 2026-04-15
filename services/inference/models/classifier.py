@@ -172,8 +172,9 @@ class ZoneClassifier:
         y: np.ndarray,
         anchor_count: int,
         factor: int = 5,
-        rssi_noise_std: float = 3.0,
+        rssi_noise_std: float = 1.5,
         dropout_prob: float = 0.15,
+        balance_classes: bool = True,
         rng: Optional[np.random.Generator] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Augment training data with RSSI jitter and anchor dropout.
@@ -186,6 +187,8 @@ class ZoneClassifier:
         factor : augmentation multiplier per sample.
         rssi_noise_std : std-dev of Gaussian noise added to RSSI columns.
         dropout_prob : probability of masking each anchor per augmented sample.
+        balance_classes : if True, oversample minority classes so each class
+            has ``max_class_count * (factor + 1)`` total samples.
         rng : numpy random generator (for reproducibility).
 
         Returns
@@ -216,7 +219,32 @@ class ZoneClassifier:
             aug_X_parts.append(X_copy)
             aug_y_parts.append(y.copy())
 
-        return np.vstack(aug_X_parts), np.concatenate(aug_y_parts)
+        X_aug = np.vstack(aug_X_parts)
+        y_aug = np.concatenate(aug_y_parts)
+
+        # Class balancing: oversample minority classes to match majority
+        if balance_classes:
+            classes, counts = np.unique(y_aug, return_counts=True)
+            max_count = counts.max()
+            extra_X, extra_y = [], []
+            for cls, cnt in zip(classes, counts):
+                if cnt >= max_count:
+                    continue
+                deficit = max_count - cnt
+                cls_indices = np.where(y_aug == cls)[0]
+                # Sample with replacement from existing augmented pool
+                chosen = rng.choice(cls_indices, size=deficit, replace=True)
+                noisy = X_aug[chosen].copy()
+                noise = rng.normal(0, rssi_noise_std, size=(deficit, anchor_count))
+                valid = noisy[:, :anchor_count] > MISSING_RSSI_SENTINEL
+                noisy[:, :anchor_count] += noise * valid
+                extra_X.append(noisy)
+                extra_y.append(np.full(deficit, cls))
+            if extra_X:
+                X_aug = np.vstack([X_aug] + extra_X)
+                y_aug = np.concatenate([y_aug] + extra_y)
+
+        return X_aug, y_aug
 
     # ------------------------------------------------------------------
     # Training
@@ -228,6 +256,7 @@ class ZoneClassifier:
         augment_factor: int = 5,
         n_estimators: int = 200,
         cv_folds: int = 5,
+        rssi_noise_std: float = 1.5,
     ) -> dict:
         """Train on fingerprint sample dicts from the database.
 
@@ -292,7 +321,8 @@ class ZoneClassifier:
         # -- Augmentation ------------------------------------------------------
         anchor_count = len(self._anchor_ids)
         if augment_factor > 0:
-            X, y = self._augment(X, y, anchor_count, factor=augment_factor)
+            X, y = self._augment(X, y, anchor_count, factor=augment_factor,
+                                 rssi_noise_std=rssi_noise_std)
 
         logger.info(
             "Training RF: %d samples (%d original × %d aug), %d features, %d classes",
