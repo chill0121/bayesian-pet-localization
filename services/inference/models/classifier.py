@@ -144,18 +144,24 @@ class ZoneClassifier:
             anchor_id → smoothed RSSI.  Provides the ``rssi_<anchor>``
             features that are *not* part of the FeatureEngine output.
         """
-        smoothed = smoothed_rssi or {}
+        # Build lower-case lookups so model feature names (mixed-case from
+        # training CSVs, e.g. "2F_Living_Center") match runtime keys
+        # (lower-case from MQTT/Kalman, e.g. "2f_living_center").
+        smoothed_raw = smoothed_rssi or {}
+        smoothed = {k.lower(): v for k, v in smoothed_raw.items()}
+        feat_lower = {k.lower(): v for k, v in features.items()}
         vec = np.zeros(len(self._feature_names), dtype=np.float64)
 
         for i, name in enumerate(self._feature_names):
+            name_lc = name.lower()
             if name.startswith("rssi_") and not name.startswith("rssi_mean_floor_") and not name.startswith("rssi_best_floor") and not name.startswith("rssi_gap_"):
                 # Smoothed RSSI per anchor
-                aid = name[len("rssi_"):]
+                aid = name[len("rssi_"):].lower()
                 vec[i] = smoothed.get(aid, MISSING_RSSI_SENTINEL)
             elif name.startswith("rssi_mean_floor_"):
-                vec[i] = features.get(name, MISSING_RSSI_SENTINEL)
-            elif name in features:
-                vec[i] = features[name]
+                vec[i] = feat_lower.get(name_lc, MISSING_RSSI_SENTINEL)
+            elif name_lc in feat_lower:
+                vec[i] = feat_lower[name_lc]
             else:
                 # Default: 0 for deltas, variances, ranks, counts
                 vec[i] = 0.0

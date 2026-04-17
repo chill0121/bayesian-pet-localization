@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 import requests
 from dash import Input, Output, Patch, State, clientside_callback, dcc, html
 from dash.exceptions import PreventUpdate
+from shapely.geometry import Point, Polygon as ShapelyPolygon
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -156,6 +157,10 @@ def fetch_stats():
     return _api_get("/stats") or {}
 
 
+def fetch_zone_history(limit=100):
+    return _api_get("/zone/history", {"limit": limit}) or []
+
+
 def fetch_floorplan():
     global _floorplan_cache
     if _floorplan_cache is not None:
@@ -241,6 +246,61 @@ def _density_colors(px, py, radius=2.0):
 # -----------------------------------------------------------------------------
 
 _dynamic_start = {}   # {floor_num: index of first dynamic trace}
+_MAX_POI_SLOTS = 8    # fixed trace slots for POI zone circles
+_POI_THETA = np.linspace(0, 2 * np.pi, 40)
+
+# Pre-built room polygon cache: {floor_num: {room_name: ShapelyPolygon}}
+_room_shapely: dict[int, dict[str, ShapelyPolygon]] = {}
+
+
+def _get_room_shapely(floor_num: int, rooms: list[dict]) -> dict[str, ShapelyPolygon]:
+    """Return (and cache) Shapely polygons for rooms on a floor."""
+    if floor_num not in _room_shapely:
+        polys = {}
+        for room in rooms:
+            coords = bounds_to_polygon(room["bounds"])
+            if len(coords) >= 3:
+                polys[room["name"]] = ShapelyPolygon(coords)
+        _room_shapely[floor_num] = polys
+    return _room_shapely[floor_num]
+
+
+def _clipped_poi_xy(
+    cx: float, cy: float, radius: float,
+    room_poly: ShapelyPolygon | None,
+) -> tuple[list[float], list[float]]:
+    """Return (xs, ys) for a POI circle clipped to its room polygon."""
+    circle = Point(cx, cy).buffer(radius, resolution=16)
+    if room_poly is not None and room_poly.is_valid:
+        clipped = circle.intersection(room_poly)
+        if clipped.is_empty:
+            return [], []
+        # Use exterior of the (largest) polygon
+        if clipped.geom_type == "MultiPolygon":
+            clipped = max(clipped.geoms, key=lambda g: g.area)
+        xs, ys = clipped.exterior.coords.xy
+        return list(xs), list(ys)
+    # Fallback: unclipped circle
+    xs = (cx + radius * np.cos(_POI_THETA)).tolist()
+    ys = (cy + radius * np.sin(_POI_THETA)).tolist()
+    return xs, ys
+
+
+def _poi_color(prob: float) -> str:
+    """Return a hex color for a POI zone based on its probability.
+
+    Blends from ACCENT (cyan) at prob=0 to SUCCESS (green) at prob>=0.5.
+    """
+    t = min(prob / 0.5, 1.0)  # 0→1 over the 0–50% range
+    # Parse hex colors
+    ah = ACCENT.lstrip("#")
+    sh = SUCCESS.lstrip("#")
+    ar = int(ah[0:2], 16); ag = int(ah[2:4], 16); ab = int(ah[4:6], 16)
+    sr = int(sh[0:2], 16); sg = int(sh[2:4], 16); sb = int(sh[4:6], 16)
+    r = int(ar + (sr - ar) * t)
+    g = int(ag + (sg - ag) * t)
+    b = int(ab + (sb - ab) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def render_floor(floor_data, position=None, particles=None, trail=None,
@@ -377,7 +437,7 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
             hoverinfo="text",
         ))
 
-    # ── Active-only dynamic overlays (fixed 9 traces for Patch support) ──
+    # ── Active-only dynamic overlays (fixed 9 + _MAX_POI_SLOTS traces for Patch support) ──
     if is_active:
         _dynamic_start[floor_num] = len(fig.data)
 
@@ -503,6 +563,47 @@ def render_floor(floor_data, position=None, particles=None, trail=None,
                 x=[], y=[], mode="markers",
                 marker=dict(size=1, opacity=0),
                 showlegend=False, hoverinfo="text", visible=False,
+            ))
+
+        # ── [+9..+9+N] POI zone circles (dynamic, probability-colored) ──
+        zone_probs = (position or {}).get("zone_probabilities", {})
+        fp_cache = fetch_floorplan()
+        poi_radius = 2.5
+        if fp_cache:
+            poi_radius = fp_cache.get("floorplan", {}).get(
+                "poi_radius_ft", 2.5)
+        room_polys = _get_room_shapely(floor_num, rooms)
+        poi_idx = 0
+        for room in rooms:
+            rpoly = room_polys.get(room["name"])
+            for poi in room.get("poi", []):
+                if poi_idx >= _MAX_POI_SLOTS:
+                    break
+                px_c = poi["position"][0]
+                py_c = poi["position"][1]
+                zone_lbl = f"{room['name']}_{poi['name']}"
+                prob = zone_probs.get(zone_lbl, 0.0)
+                fill_alpha = 0.08 + prob * 0.45
+                line_alpha = 0.25 + prob * 0.6
+                color = _poi_color(prob)
+                cx, cy = _clipped_poi_xy(px_c, py_c, poi_radius, rpoly)
+                fig.add_trace(go.Scatter(
+                    x=cx, y=cy,
+                    mode="lines", fill="toself",
+                    fillcolor=hex_to_rgba(color, fill_alpha),
+                    line=dict(color=hex_to_rgba(color, line_alpha),
+                              width=1, dash="dot"),
+                    showlegend=False,
+                    hovertext=f"{poi['name']}: {prob:.0%}",
+                    hoverinfo="text",
+                ))
+                poi_idx += 1
+        for _ in range(poi_idx, _MAX_POI_SLOTS):
+            fig.add_trace(go.Scatter(
+                x=[], y=[], mode="lines", fill="toself",
+                fillcolor="rgba(0,0,0,0)",
+                line=dict(color="rgba(0,0,0,0)", width=1, dash="dot"),
+                showlegend=False, hoverinfo="skip", visible=False,
             ))
 
     # ── Thumbnail particle overlay ──
@@ -649,6 +750,48 @@ def _patch_active_dynamic(n_static, floor_num, position, particles, trail,
         p["data"][didx]["visible"] = False
         if LUNA_MARKER_B64:
             p["layout"]["images"] = []
+
+    # ── [+9..+9+N] POI zone circles ──
+    zone_probs = (position or {}).get("zone_probabilities", {})
+    fp_cache = fetch_floorplan()
+    poi_radius = 2.5
+    floor_rooms = []
+    if fp_cache:
+        poi_radius = fp_cache.get("floorplan", {}).get(
+            "poi_radius_ft", 2.5)
+        for fd in fp_cache.get("floorplan", {}).get("floors", []):
+            if fd["floor"] == floor_num:
+                floor_rooms = fd.get("rooms", [])
+                break
+    room_polys = _get_room_shapely(floor_num, floor_rooms)
+    poi_idx = 0
+    for room in floor_rooms:
+        rpoly = room_polys.get(room["name"])
+        for poi in room.get("poi", []):
+            if poi_idx >= _MAX_POI_SLOTS:
+                break
+            slot = n_static + 9 + poi_idx
+            px_c = poi["position"][0]
+            py_c = poi["position"][1]
+            zone_lbl = f"{room['name']}_{poi['name']}"
+            prob = zone_probs.get(zone_lbl, 0.0)
+            fill_alpha = 0.08 + prob * 0.45
+            line_alpha = 0.25 + prob * 0.6
+            color = _poi_color(prob)
+            cx, cy = _clipped_poi_xy(px_c, py_c, poi_radius, rpoly)
+            p["data"][slot]["x"] = cx
+            p["data"][slot]["y"] = cy
+            p["data"][slot]["fillcolor"] = hex_to_rgba(color, fill_alpha)
+            p["data"][slot]["line"]["color"] = hex_to_rgba(
+                color, line_alpha)
+            p["data"][slot]["hovertext"] = f"{poi['name']}: {prob:.0%}"
+            p["data"][slot]["visible"] = True
+            poi_idx += 1
+    for i in range(poi_idx, _MAX_POI_SLOTS):
+        slot = n_static + 9 + i
+        p["data"][slot]["x"] = []
+        p["data"][slot]["y"] = []
+        p["data"][slot]["visible"] = False
 
     return p
 
@@ -901,6 +1044,147 @@ def build_rssi_sparklines(rssi_history):
     return fig
 
 
+def build_zone_card(position):
+    """Build Zone Classifier card contents from current position data."""
+    if not position:
+        return [html.Small("No data", className="text-muted")]
+
+    zone_label = position.get("zone_label")
+    zone_conf = position.get("zone_confidence", 0)
+    zone_probs = position.get("zone_probabilities", {})
+    rw = position.get("reweight_stats", {})
+
+    if not zone_label:
+        if zone_probs:
+            return [html.Small("No matching zone for current room",
+                              className="text-muted",
+                              style={"fontSize": "0.8rem"})]
+        return [html.Small("Awaiting zone prediction\u2026",
+                          className="text-muted",
+                          style={"fontSize": "0.8rem"})]
+
+    children = []
+
+    # Predicted zone + confidence
+    children.append(html.Div([
+        html.Strong(zone_label, className="text-light",
+                    style={"fontSize": "0.95rem"}),
+        html.Span(f"  {zone_conf:.0%}",
+                  style={"color": SUCCESS if zone_conf > 0.5
+                         else WARNING if zone_conf > 0.25 else DANGER,
+                         "fontSize": "0.85rem", "marginLeft": "6px"}),
+    ], className="mb-2"))
+
+    # Top-3 zone probabilities as mini bars
+    if zone_probs:
+        sorted_probs = sorted(zone_probs.items(), key=lambda kv: kv[1],
+                              reverse=True)[:4]
+        bar_children = []
+        for zname, zprob in sorted_probs:
+            is_active_zone = zname == zone_label
+            bar_color = ACCENT if is_active_zone else MUTED_TEXT
+            bar_children.append(html.Div([
+                html.Div([
+                    html.Small(zname.replace("_", " "),
+                               style={"color": TEXT_COLOR if is_active_zone
+                                      else MUTED_TEXT,
+                                      "fontSize": "0.7rem",
+                                      "width": "110px",
+                                      "display": "inline-block",
+                                      "overflow": "hidden",
+                                      "textOverflow": "ellipsis",
+                                      "whiteSpace": "nowrap"}),
+                    html.Div(style={
+                        "display": "inline-block",
+                        "width": f"{max(zprob * 100, 2):.0f}%",
+                        "maxWidth": "calc(100% - 145px)",
+                        "height": "8px",
+                        "backgroundColor": bar_color,
+                        "borderRadius": "2px",
+                        "marginLeft": "4px",
+                        "verticalAlign": "middle",
+                    }),
+                    html.Small(f" {zprob:.0%}",
+                               style={"color": MUTED_TEXT,
+                                      "fontSize": "0.65rem",
+                                      "marginLeft": "4px"}),
+                ], style={"lineHeight": "1.4"}),
+            ]))
+        children.append(html.Div(bar_children, className="mb-2"))
+
+    # Reweight stats
+    n_poi = rw.get("particles_in_poi", 0)
+    shift = rw.get("max_weight_shift", 1.0)
+    rw_color = SUCCESS if n_poi > 0 else MUTED_TEXT
+    children.append(html.Div([
+        html.Small([
+            html.Span(f"In POI: {n_poi}", style={"color": rw_color}),
+            html.Span("  |  ", style={"color": MUTED_TEXT}),
+            html.Span(f"Shift: {shift:.1f}×",
+                      style={"color": WARNING if shift > 2 else MUTED_TEXT}),
+        ], style={"fontSize": "0.7rem"}),
+    ]))
+
+    return children
+
+
+def build_zone_sparkline(zone_history):
+    """Zone probability sparkline chart over time."""
+    if not zone_history:
+        return _empty_figure("No zone history yet", height=250)
+
+    # Collect all zone labels that appeared
+    all_zones: dict[str, list[float]] = {}
+    timestamps = []
+    for entry in zone_history:
+        timestamps.append(len(timestamps))
+        probs = entry.get("probabilities", {})
+        for z in probs:
+            if z not in all_zones:
+                all_zones[z] = [0.0] * len(timestamps[:-1])
+        for z in all_zones:
+            all_zones[z].append(probs.get(z, 0.0))
+
+    if not all_zones:
+        return _empty_figure("No zone data", height=250)
+
+    # Sort by average probability (descending), show top 6
+    zone_avg = {z: sum(vals) / len(vals) for z, vals in all_zones.items()}
+    top_zones = sorted(zone_avg, key=zone_avg.get, reverse=True)[:6]
+
+    colors = ["#4fc3f7", "#66bb6a", "#ffa726", "#ef5350", "#ab47bc",
+              "#26c6da", "#ffee58", "#ec407a"]
+    fig = go.Figure()
+    for ci, z in enumerate(top_zones):
+        fig.add_trace(go.Scatter(
+            x=timestamps, y=all_zones[z],
+            mode="lines", name=z.replace("_", " "),
+            line=dict(color=colors[ci % len(colors)], width=1.5),
+            fill="tozeroy" if ci == 0 else None,
+            fillcolor=f"rgba(79,195,247,0.1)" if ci == 0 else None,
+        ))
+
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title="Sample", tickfont=dict(color=MUTED_TEXT, size=8),
+                   title_font=dict(color=MUTED_TEXT, size=9),
+                   gridcolor=GRID_COLOR),
+        yaxis=dict(title="Probability", range=[0, 1],
+                   tickfont=dict(color=MUTED_TEXT, size=8),
+                   title_font=dict(color=MUTED_TEXT, size=9),
+                   gridcolor=GRID_COLOR),
+        legend=dict(font=dict(size=8, color=TEXT_COLOR),
+                    bgcolor="rgba(0,0,0,0)",
+                    orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(l=45, r=10, t=40, b=30),
+        height=250,
+        title=dict(text="Zone Probabilities (over time)",
+                   font=dict(size=11, color=TEXT_COLOR)),
+    )
+    return fig
+
+
 def build_diagnostics_table(stats):
     """Return a list of dbc.ListGroupItem for pipeline diagnostics."""
     if not stats:
@@ -931,9 +1215,9 @@ def build_diagnostics_table(stats):
                     if pipeline.get("floor_hmm_active") else "Inactive",
                     pipeline.get("floor_hmm_active", False)),
         _diag_item("RF Classifier",
-                    f"Trained — {len(pipeline.get('rf_classes', []))} classes"
-                    if pipeline.get("rf_classifier_active") else "Not trained",
-                    pipeline.get("rf_classifier_active", False)),
+                    f"Trained — {len(pipeline.get('zone_classes', []))} classes"
+                    if pipeline.get("zone_classifier_active") else "Not trained",
+                    pipeline.get("zone_classifier_active", False)),
     ]
     items.append(dbc.ListGroupItem([
         html.Small(f"Messages: {stats.get('message_count', 0):,}  |  "
@@ -1139,6 +1423,13 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
                                        className="py-1 px-3 small"),
                         dbc.CardBody(id="activity-card", className="p-3 text-center"),
                     ]),
+                    # Zone Classifier
+                    dbc.Card(className="bg-dark border-secondary mb-3",
+                             children=[
+                        dbc.CardHeader("Zone Classifier",
+                                       className="py-1 px-3 small"),
+                        dbc.CardBody(id="zone-card", className="p-2"),
+                    ]),
                     # RSSI bars
                     dbc.Card(className="bg-dark border-secondary", children=[
                         dbc.CardHeader("Signal Strength",
@@ -1195,6 +1486,16 @@ app.layout = dbc.Container(fluid=True, className="py-3", children=[
 
         # ══════════ TAB 2: SIGNAL ANALYSIS ══════════
         dbc.Tab(label="Signals", tab_id="signals", children=[
+            dbc.Row(className="g-3 mt-1", children=[
+                dbc.Col(width=12, children=[
+                    dbc.Card(className="bg-dark border-secondary", children=[
+                        dbc.CardBody([
+                            dcc.Graph(id="sig-zone-sparkline",
+                                      config={"displayModeBar": False}),
+                        ], className="p-2"),
+                    ]),
+                ]),
+            ]),
             dbc.Row(className="g-3 mt-1", children=[
                 dbc.Col(width=12, lg=6, children=[
                     dbc.Card(className="bg-dark border-secondary", children=[
@@ -1433,6 +1734,7 @@ def fetch_data(_n):
     Output("floor-thumb-3", "figure"),
     Output("floor-belief", "figure"),
     Output("activity-card", "children"),
+    Output("zone-card", "children"),
     Output("rssi-bars", "figure"),
     Output("timeline", "figure"),
     Output("thumb-col-1", "style"),
@@ -1539,18 +1841,22 @@ def update_live(position, particles, rssi, trail, active_tab, viz_options,
     else:
         act_children = [html.Span("—", className="text-muted h4")]
 
+    # Zone classifier card
+    zone_children = build_zone_card(position)
+
     # RSSI
     rssi_fig = build_rssi_chart(rssi)
 
     # Timeline
     timeline_fig = build_timeline(trail, "recent")
 
-    return (main_fig, *thumbs, belief_fig, act_children, rssi_fig,
-            timeline_fig, *thumb_styles, active_floor)
+    return (main_fig, *thumbs, belief_fig, act_children, zone_children,
+            rssi_fig, timeline_fig, *thumb_styles, active_floor)
 
 
 # ── Signals tab ──
 @app.callback(
+    Output("sig-zone-sparkline", "figure"),
     Output("sig-rssi-bars", "figure"),
     Output("sig-floor-belief", "figure"),
     Output("sig-sparklines", "figure"),
@@ -1563,12 +1869,14 @@ def update_signals(position, rssi, _n, active_tab):
     if active_tab != "signals":
         raise PreventUpdate
 
+    zone_hist = fetch_zone_history(limit=100)
+    zone_spark = build_zone_sparkline(zone_hist)
     rssi_fig = build_rssi_chart(rssi)
     fb = position.get("floor_belief") if position else None
     belief_fig = build_floor_belief_chart(fb)
     rssi_hist = fetch_rssi_history(limit=200)
     spark_fig = build_rssi_sparklines(rssi_hist)
-    return rssi_fig, belief_fig, spark_fig
+    return zone_spark, rssi_fig, belief_fig, spark_fig
 
 
 # ── History tab ──
