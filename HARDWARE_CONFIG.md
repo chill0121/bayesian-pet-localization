@@ -59,3 +59,8 @@ Configured via BlueCharm Toolbox app.
 | tx_ref_rssi | -59 | Not used for iBeacon devices |
 | rx_adj_rssi | 20 | Per-receiver offset |
 | absorption | 2.70 | Environmental factor |
+
+### Hardware User Manual Links
+https://docs.m5stack.com/en/core/AtomS3%20Lite
+
+https://bluecharmbeacons.com/bc021-pro-ibeacon-deep-dive-into-the-configuration-screens/#TX%20Power
